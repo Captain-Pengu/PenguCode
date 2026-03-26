@@ -222,3 +222,4 @@ Büyük değişiklikler için önce issue aç.
 # 📜 LİSANS
 
 MIT (veya tercih ettiğin)
+
