@@ -293,3 +293,37 @@ add_test(
     COMMAND pengufoce_spider_workflow_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+add_executable(pengufoce_spider_core_tests
+    tests/spider_core_tests.cpp
+    src/modules/spider/engine/cdpclient.cpp
+    src/modules/spider/engine/spidercore.cpp
+    src/modules/spider/engine/spiderscope.cpp
+    src/modules/spider/engine/spiderworkflow.cpp
+    src/modules/spider/engine/htmlextractor.cpp
+)
+
+target_include_directories(pengufoce_spider_core_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pengufoce_spider_core_tests PRIVATE
+    Qt6::Core
+    Qt6::Network
+)
+
+if(PENGUFOCE_WITH_HTML5_PARSER)
+    target_compile_definitions(pengufoce_spider_core_tests PRIVATE PENGUFOCE_WITH_HTML5_PARSER=1)
+endif()
+
+if(PENGUFOCE_WITH_HTML5_PARSER AND GUMBO_INCLUDE_DIR AND GUMBO_LIBRARY)
+    target_include_directories(pengufoce_spider_core_tests PRIVATE ${GUMBO_INCLUDE_DIR})
+    target_link_libraries(pengufoce_spider_core_tests PRIVATE ${GUMBO_LIBRARY})
+    target_compile_definitions(pengufoce_spider_core_tests PRIVATE PENGUFOCE_WITH_GUMBO=1)
+endif()
+
+add_test(
+    NAME pengufoce_spider_core_tests
+    COMMAND pengufoce_spider_core_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
