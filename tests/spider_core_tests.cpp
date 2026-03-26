@@ -41,6 +41,11 @@ public:
         m_getResults[url] = result;
     }
 
+    void addPost(const QString &url, const SpiderFetchResult &result)
+    {
+        m_postResults[url] = result;
+    }
+
     SpiderFetchResult fetch(const QUrl &url, int timeoutMs, const QVariantMap &headers = {}) override
     {
         Q_UNUSED(timeoutMs);
@@ -63,6 +68,13 @@ public:
     SpiderFetchResult submitForm(const QUrl &url, const QVariantMap &fields, int timeoutMs, const QVariantMap &headers = {}) override
     {
         Q_UNUSED(fields);
+        Q_UNUSED(timeoutMs);
+        Q_UNUSED(headers);
+        const QString key = url.toString();
+        auto it = m_postResults.find(key);
+        if (it != m_postResults.end()) {
+            return it.value();
+        }
         return fetch(url, timeoutMs, headers);
     }
 
@@ -78,6 +90,7 @@ public:
 
 private:
     QHash<QString, SpiderFetchResult> m_getResults;
+    QHash<QString, SpiderFetchResult> m_postResults;
 };
 
 class FakeSpiderRenderer final : public ISpiderDomRenderer
@@ -231,13 +244,159 @@ int testPortalReplayAndSuppression()
     return 0;
 }
 
+int testAuthWorkflowOptionalSkip()
+{
+    const QString seedUrl = QStringLiteral("https://portal.example.com/app");
+    const QString seedHtml = QStringLiteral("<html><body><a href=\"/tenant/acme/reports\">Reports</a></body></html>");
+
+    auto fetcher = std::make_unique<FakeSpiderFetcher>();
+    fetcher->addGet(seedUrl, makeHtmlResult(seedUrl, seedHtml));
+    fetcher->addGet(QStringLiteral("https://portal.example.com/robots.txt"),
+                    makeHtmlResult(QStringLiteral("https://portal.example.com/robots.txt"), QStringLiteral("User-agent: *")));
+    fetcher->addGet(QStringLiteral("https://portal.example.com/sitemap.xml"),
+                    makeHtmlResult(QStringLiteral("https://portal.example.com/sitemap.xml"), QStringLiteral("<xml/>"), 404));
+    fetcher->addGet(QStringLiteral("https://portal.example.com/manifest.json"),
+                    makeHtmlResult(QStringLiteral("https://portal.example.com/manifest.json"), QStringLiteral("{}"), 404));
+    fetcher->addPost(QStringLiteral("https://portal.example.com/tenant/acme/login"),
+                     makeHtmlResult(QStringLiteral("https://portal.example.com/tenant/acme/home"),
+                                    QStringLiteral("<html><body>Workspace Home</body></html>")));
+    fetcher->addGet(QStringLiteral("https://portal.example.com/tenant/acme/profile"),
+                    makeHtmlResult(QStringLiteral("https://portal.example.com/tenant/acme/profile"),
+                                   QStringLiteral("<html><body>Profile</body></html>")));
+
+    SpiderCore core(std::move(fetcher),
+                    nullptr,
+                    createSpiderHtmlExtractor(SpiderHtmlExtractorBackend::FastTokenizer));
+
+    QList<SpiderDiscoveredAsset> assets;
+    QMutex assetsMutex;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+
+    core.setAssetCallback([&](SpiderDiscoveredAsset asset) {
+        QMutexLocker locker(&assetsMutex);
+        assets.push_back(std::move(asset));
+    });
+    core.setFinishedCallback([&]() {
+        QMetaObject::invokeMethod(&loop, [&]() { loop.quit(); }, Qt::QueuedConnection);
+    });
+
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeout.start(5000);
+
+    SpiderRunOptions options;
+    options.maxPages = 6;
+    options.maxDepth = 1;
+    options.maxInFlight = 2;
+    options.timeoutMs = 500;
+    options.maxRetries = 0;
+    options.auth.enabled = true;
+    options.auth.loginUrl = QUrl(QStringLiteral("https://portal.example.com/tenant/acme/login"));
+    options.auth.username = QStringLiteral("analyst");
+    options.auth.password = QStringLiteral("secret");
+    options.auth.workflowSteps = parseSpiderWorkflowSteps(QStringLiteral(
+        "/tenant/acme/login|POST|direct|label=Tenant Login|expect=status:200|expect=body:Workspace\n"
+        "/tenant/acme/profile|GET|direct|label=Profile|optional|expect=url:/missing\n"));
+
+    core.start(QUrl(seedUrl), options);
+    loop.exec();
+    core.stop();
+
+    {
+        QMutexLocker locker(&assetsMutex);
+        if (!require(hasAssetKind(assets, QStringLiteral("auth-step-label"), QStringLiteral("Tenant Login")),
+                     QStringLiteral("auth-step-label gelmedi"))) {
+            return 1;
+        }
+        if (!require(hasAssetKind(assets, QStringLiteral("auth-request"), QStringLiteral("workflow-step=1")),
+                     QStringLiteral("auth-request gelmedi"))) {
+            return 1;
+        }
+        if (!require(hasAssetKind(assets, QStringLiteral("auth-step-optional-skip"), QStringLiteral("Profile")),
+                     QStringLiteral("optional skip asset gelmedi"))) {
+            return 1;
+        }
+        if (!require(hasAssetKind(assets, QStringLiteral("auth-boundary")),
+                     QStringLiteral("auth-boundary asset gelmedi"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int testWafVendorDetection()
+{
+    const QString seedUrl = QStringLiteral("https://portal.example.com/app");
+    SpiderFetchResult wafResult = makeHtmlResult(seedUrl,
+                                                 QStringLiteral("<html><title>Just a moment</title><body>Attention Required! Cloudflare security check</body></html>"),
+                                                 429);
+    wafResult.responseHeaders.insert(QStringLiteral("cf-cache-status"), QStringLiteral("DYNAMIC"));
+    wafResult.pageTitle = QStringLiteral("Just a moment");
+
+    auto fetcher = std::make_unique<FakeSpiderFetcher>();
+    fetcher->addGet(seedUrl, wafResult);
+    fetcher->addGet(QStringLiteral("https://portal.example.com/robots.txt"),
+                    makeHtmlResult(QStringLiteral("https://portal.example.com/robots.txt"), QStringLiteral("User-agent: *")));
+    fetcher->addGet(QStringLiteral("https://portal.example.com/sitemap.xml"),
+                    makeHtmlResult(QStringLiteral("https://portal.example.com/sitemap.xml"), QStringLiteral("<xml/>"), 404));
+    fetcher->addGet(QStringLiteral("https://portal.example.com/manifest.json"),
+                    makeHtmlResult(QStringLiteral("https://portal.example.com/manifest.json"), QStringLiteral("{}"), 404));
+
+    SpiderCore core(std::move(fetcher),
+                    nullptr,
+                    createSpiderHtmlExtractor(SpiderHtmlExtractorBackend::FastTokenizer));
+
+    QList<SpiderDiscoveredAsset> assets;
+    QMutex assetsMutex;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+
+    core.setAssetCallback([&](SpiderDiscoveredAsset asset) {
+        QMutexLocker locker(&assetsMutex);
+        assets.push_back(std::move(asset));
+    });
+    core.setFinishedCallback([&]() {
+        QMetaObject::invokeMethod(&loop, [&]() { loop.quit(); }, Qt::QueuedConnection);
+    });
+
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeout.start(5000);
+
+    SpiderRunOptions options;
+    options.maxPages = 4;
+    options.maxDepth = 0;
+    options.maxInFlight = 1;
+    options.timeoutMs = 500;
+    options.maxRetries = 0;
+
+    core.start(QUrl(seedUrl), options);
+    loop.exec();
+    core.stop();
+
+    {
+        QMutexLocker locker(&assetsMutex);
+        if (!require(hasAssetKind(assets, QStringLiteral("waf-vendor"), QStringLiteral("cloudflare")),
+                     QStringLiteral("waf-vendor asset gelmedi"))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
 
-    const int failures = testPortalReplayAndSuppression();
+    const int failures =
+        testPortalReplayAndSuppression() +
+        testAuthWorkflowOptionalSkip() +
+        testWafVendorDetection();
 
     if (failures == 0) {
         std::cout << "spider core tests passed" << std::endl;
