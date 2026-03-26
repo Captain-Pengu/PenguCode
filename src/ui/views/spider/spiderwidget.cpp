@@ -7,9 +7,11 @@
 
 #include <QCursor>
 #include <QDateTime>
+#include <QDir>
 #include <QDialog>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -21,10 +23,12 @@
 #include <QPlainTextEdit>
 #include <QPdfWriter>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QStringConverter>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -246,6 +250,52 @@ QString spiderReportFileName(const QString &target, const QString &extension)
              extension);
 }
 
+QString spiderReportDefaultPath(const QString &target, const QString &extension)
+{
+    QString baseDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (baseDir.trimmed().isEmpty()) {
+        baseDir = QDir::currentPath();
+    }
+    return QDir(baseDir).filePath(spiderReportFileName(target, extension));
+}
+
+bool saveSpiderPdfReport(const QString &path, const QString &html, QString *errorMessage)
+{
+    QString resolvedPath = path.trimmed();
+    if (resolvedPath.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QObject::tr("Gecerli bir dosya yolu secilmedi.");
+        }
+        return false;
+    }
+    if (!resolvedPath.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive)) {
+        resolvedPath += QStringLiteral(".pdf");
+    }
+
+    {
+        QPdfWriter writer(resolvedPath);
+        writer.setResolution(144);
+        writer.setPageSize(QPageSize(QPageSize::A4));
+        writer.setPageMargins(QMarginsF(18, 18, 18, 18), QPageLayout::Millimeter);
+        writer.setTitle(QObject::tr("PenguFoce Spider Kesif Raporu"));
+
+        QTextDocument document;
+        document.setDocumentMargin(18.0);
+        document.setHtml(html);
+        document.setPageSize(writer.pageLayout().paintRectPixels(writer.resolution()).size());
+        document.print(&writer);
+    }
+
+    const QFileInfo info(resolvedPath);
+    if (!info.exists() || info.size() <= 0) {
+        if (errorMessage) {
+            *errorMessage = QObject::tr("PDF dosyasi olusturulamadi.");
+        }
+        return false;
+    }
+    return true;
+}
+
 bool shouldSuppressReportAsset(const QVariantMap &row)
 {
     const QString kind = row.value("kind").toString();
@@ -354,9 +404,9 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     auto *statusCard = makeSpiderInfoBlock(hero, tr("Durum"), &m_statusValue);
     auto *countsCard = makeSpiderInfoBlock(hero, tr("Gezilen / Kuyruk"), &m_countsValue);
     auto *coverageCard = makeSpiderInfoBlock(hero, tr("Yuzey Puani"), &m_coverageValue);
-    statusCard->setMinimumWidth(150);
-    countsCard->setMinimumWidth(150);
-    coverageCard->setMinimumWidth(150);
+    statusCard->setMinimumWidth(132);
+    countsCard->setMinimumWidth(132);
+    coverageCard->setMinimumWidth(132);
     summary->addWidget(statusCard);
     summary->addWidget(countsCard);
     summary->addWidget(coverageCard);
@@ -442,9 +492,9 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     m_authWorkflowHintLabel->setWordWrap(true);
     m_workflowValidationLabel->setObjectName("mutedText");
     m_workflowValidationLabel->setWordWrap(true);
-    m_includePatternsEdit->setMaximumHeight(82);
-    m_excludePatternsEdit->setMaximumHeight(82);
-    m_authWorkflowEdit->setMaximumHeight(110);
+    m_includePatternsEdit->setMaximumHeight(72);
+    m_excludePatternsEdit->setMaximumHeight(72);
+    m_authWorkflowEdit->setMaximumHeight(96);
     m_includePatternsEdit->setPlaceholderText(tr("Her satira bir regex include kurali"));
     m_excludePatternsEdit->setPlaceholderText(tr("Her satira bir regex exclude kurali"));
     m_authWorkflowEdit->setPlaceholderText(tr("Her satir: url|POST|form|username={{username}}|password={{password}}|header:X-Test=1|expect=!login|expect=header:location|expect=cookie:PHPSESSID|expect=redirect:/panel|expect=!redirect:login"));
@@ -463,7 +513,7 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
 
     m_scopeCard = new QFrame(setupCard);
     m_scopeCard->setObjectName("summaryCard");
-    m_scopeCard->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    m_scopeCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *scopeLayout = new QGridLayout(m_scopeCard);
     scopeLayout->setContentsMargins(14, 14, 14, 14);
     scopeLayout->setHorizontalSpacing(12);
@@ -484,7 +534,7 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
 
     m_authCard = new QFrame(setupCard);
     m_authCard->setObjectName("summaryCard");
-    m_authCard->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    m_authCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *authLayout = new QGridLayout(m_authCard);
     authLayout->setContentsMargins(14, 14, 14, 14);
     authLayout->setHorizontalSpacing(12);
@@ -500,7 +550,7 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
 
     m_advancedCard = new QFrame(setupCard);
     m_advancedCard->setObjectName("summaryCard");
-    m_advancedCard->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    m_advancedCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *advancedLayout = new QGridLayout(m_advancedCard);
     advancedLayout->setContentsMargins(14, 14, 14, 14);
     advancedLayout->setHorizontalSpacing(12);
@@ -547,7 +597,7 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     consoleInfo->setWordWrap(true);
     m_console = new QPlainTextEdit(consoleCard);
     m_console->setReadOnly(true);
-    m_console->setMinimumHeight(180);
+    m_console->setMinimumHeight(148);
     m_console->setLineWrapMode(QPlainTextEdit::NoWrap);
     consoleLayout->addWidget(consoleTitle);
     consoleLayout->addWidget(consoleInfo);
@@ -571,7 +621,7 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     evidenceCardLayout->insertWidget(2, m_assetFilterCombo);
     m_evidenceDetailView = new QTextEdit(evidenceCard);
     m_evidenceDetailView->setReadOnly(true);
-    m_evidenceDetailView->setMinimumHeight(150);
+    m_evidenceDetailView->setMinimumHeight(120);
     m_evidenceDetailView->setHtml(tr("<h3>Kanit detayi</h3><p>Bir kayit sec.</p>"));
     evidenceCardLayout->addWidget(m_evidenceDetailView);
 
@@ -645,16 +695,16 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     setupTabLayout->setContentsMargins(0, 0, 0, 0);
     setupTabLayout->setSpacing(14);
     auto *detailHost = new QWidget(setupTab);
-    auto *detailRow = new FlowLayout(detailHost, 0, 14, 14);
-    m_scopeCard->setMinimumWidth(260);
-    m_authCard->setMinimumWidth(260);
-    m_advancedCard->setMinimumWidth(320);
+    auto *detailRow = new FlowLayout(detailHost, 0, 12, 12);
+    m_scopeCard->setMinimumWidth(220);
+    m_authCard->setMinimumWidth(220);
+    m_advancedCard->setMinimumWidth(260);
     detailRow->addWidget(m_scopeCard);
     detailRow->addWidget(m_authCard);
+    detailRow->addWidget(m_advancedCard);
     detailHost->setLayout(detailRow);
     setupTabLayout->addWidget(setupCard);
     setupTabLayout->addWidget(detailHost);
-    setupTabLayout->addWidget(m_advancedCard);
     setupTabLayout->addStretch();
 
     m_workTabs = new QTabWidget(this);
@@ -1639,42 +1689,40 @@ void SpiderWidget::exportReport()
     delete m_reportPreviewDialog;
     auto *dialog = new SpiderReportPreviewDialog(this);
     m_reportPreviewDialog = dialog;
+    connect(dialog, &QDialog::finished, this, [this]() {
+        m_reportPreviewDialog = nullptr;
+    });
     dialog->view()->setHtml(m_lastReportHtml);
-    const QString pdfDefaultName = spiderReportFileName(m_module ? m_module->targetUrl() : QString(), QStringLiteral("pdf"));
-    const QString htmlDefaultName = spiderReportFileName(m_module ? m_module->targetUrl() : QString(), QStringLiteral("html"));
+    const QString target = m_module ? m_module->targetUrl() : QString();
+    const QString pdfDefaultPath = spiderReportDefaultPath(target, QStringLiteral("pdf"));
+    const QString htmlDefaultPath = spiderReportDefaultPath(target, QStringLiteral("html"));
 
-    connect(dialog->savePdfButton(), &QPushButton::clicked, dialog, [this, dialog, pdfDefaultName]() {
+    connect(dialog->savePdfButton(), &QPushButton::clicked, dialog, [this, dialog, pdfDefaultPath]() {
         const QString path = QFileDialog::getSaveFileName(dialog,
                                                           tr("Spider PDF Kaydet"),
-                                                          pdfDefaultName,
+                                                          pdfDefaultPath,
                                                           tr("PDF (*.pdf)"));
         if (path.isEmpty()) {
             return;
         }
 
-        QPdfWriter writer(path);
-        writer.setResolution(144);
-        writer.setPageSize(QPageSize(QPageSize::A4));
-        writer.setPageMargins(QMarginsF(18, 18, 18, 18), QPageLayout::Millimeter);
-        writer.setTitle(tr("PenguFoce Spider Kesif Raporu"));
-
-        QTextDocument document;
-        document.setDocumentMargin(18.0);
-        document.setHtml(m_lastReportHtml);
-        document.setPageSize(writer.pageLayout().paintRectPixels(writer.resolution()).size());
-        document.print(&writer);
+        QString errorMessage;
+        if (!saveSpiderPdfReport(path, m_lastReportHtml, &errorMessage)) {
+            appendEvent(tr("Spider PDF raporu kaydedilemedi: %1").arg(errorMessage));
+            return;
+        }
         appendEvent(tr("Spider PDF raporu kaydedildi: %1").arg(path));
     });
 
-    connect(dialog->saveHtmlButton(), &QPushButton::clicked, dialog, [this, dialog, htmlDefaultName]() {
+    connect(dialog->saveHtmlButton(), &QPushButton::clicked, dialog, [this, dialog, htmlDefaultPath]() {
         const QString path = QFileDialog::getSaveFileName(dialog,
                                                           tr("Spider HTML Kaydet"),
-                                                          htmlDefaultName,
+                                                          htmlDefaultPath,
                                                           tr("HTML (*.html)"));
         if (path.isEmpty()) {
             return;
         }
-        QFile file(path);
+        QSaveFile file(path);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
             appendEvent(tr("HTML raporu kaydedilemedi: %1").arg(path));
             return;
@@ -1682,6 +1730,10 @@ void SpiderWidget::exportReport()
         QTextStream stream(&file);
         stream.setEncoding(QStringConverter::Utf8);
         stream << m_lastReportHtml;
+        if (!file.commit()) {
+            appendEvent(tr("HTML raporu kaydedilemedi: %1").arg(path));
+            return;
+        }
         appendEvent(tr("Spider HTML raporu kaydedildi: %1").arg(path));
     });
 

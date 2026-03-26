@@ -1474,6 +1474,11 @@ void SpiderCore::consumeFetchResult(QueueEntry entry, SpiderFetchResult result)
             std::scoped_lock lock(m_queueMutex);
             m_queue.push(std::move(retryEntry));
         }
+        if (wafChallenge) {
+            emitAsset({QStringLiteral("waf-vendor"),
+                       vendorHint,
+                       entry.url.toString()});
+        }
         emitEvent(QStringLiteral("[retry] %1 icin yeniden deneme planlandi (%2/%3 | gecikme=%4 ms%5)")
                       .arg(entry.url.toString())
                       .arg(entry.retryCount + 1)
