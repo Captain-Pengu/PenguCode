@@ -326,6 +326,66 @@ QVariantMap SpiderModule::defaultSettings() const
     };
 }
 
+QVariantMap SpiderModule::saveState() const
+{
+    return {
+        {"targetUrl", m_targetUrl},
+        {"maxPages", m_maxPages},
+        {"maxDepth", m_maxDepth},
+        {"requestTimeoutMs", m_requestTimeoutMs},
+        {"scanStage", m_scanStage},
+        {"scopePreset", m_scopePreset},
+        {"statusText", m_statusText},
+        {"coverageScore", m_coverageScore},
+        {"coverageSummary", m_coverageSummary},
+        {"endpoints", m_endpoints},
+        {"parameters", m_parameters},
+        {"assets", m_assets}
+    };
+}
+
+bool SpiderModule::loadState(const QVariantMap &state)
+{
+    m_targetUrl = state.value("targetUrl", m_targetUrl).toString();
+    m_maxPages = state.value("maxPages", m_maxPages).toInt();
+    m_maxDepth = state.value("maxDepth", m_maxDepth).toInt();
+    m_requestTimeoutMs = state.value("requestTimeoutMs", m_requestTimeoutMs).toInt();
+    m_scanStage = state.value("scanStage", m_scanStage).toInt();
+    m_scopePreset = state.value("scopePreset", m_scopePreset).toString();
+    m_statusText = state.value("statusText", m_statusText).toString();
+    m_coverageScore = state.value("coverageScore", m_coverageScore).toInt();
+    m_coverageSummary = state.value("coverageSummary", m_coverageSummary).toString();
+    m_endpoints = state.value("endpoints").toList();
+    m_parameters = state.value("parameters").toList();
+    m_assets = state.value("assets").toList();
+    emit statusChanged();
+    emit resultsChanged();
+    emit statsChanged();
+    return true;
+}
+
+void SpiderModule::reset()
+{
+    stop();
+    m_endpoints.clear();
+    m_parameters.clear();
+    m_assets.clear();
+    m_statusText = tr("Hazir");
+    emit statusChanged();
+    emit resultsChanged();
+}
+
+QString SpiderModule::healthStatus() const
+{
+    if (m_scanning) {
+        return QStringLiteral("BUSY");
+    }
+    if (m_assets.size() > 2000 || m_endpoints.size() > 2000) {
+        return QStringLiteral("DEGRADED");
+    }
+    return QStringLiteral("HEALTHY");
+}
+
 QString SpiderModule::targetUrl() const
 {
     return m_targetUrl;
@@ -1089,6 +1149,8 @@ void SpiderModule::recordAsset(const QString &kind, const QString &value, const 
         appendTimelineEvent(m_coverageTimeline, tr("workflow"), tr("Etkilesim replay sonucu"), value);
     } else if (kind == QLatin1String("waf-vendor")) {
         appendTimelineEvent(m_coverageTimeline, tr("waf"), tr("WAF saglayici ipucu"), value);
+    } else if (kind == QLatin1String("host-pressure")) {
+        appendTimelineEvent(m_coverageTimeline, tr("waf"), tr("Host pressure guncellendi"), value);
     } else if (kind == QLatin1String("automation-live-title")) {
         appendTimelineEvent(m_coverageTimeline, tr("automation"), tr("Canli browser basligi"), value);
     } else if (kind == QLatin1String("automation-live-action")) {
@@ -1429,6 +1491,9 @@ void SpiderModule::updateCoverageScore()
             score += 2;
             ++protectedSurface;
             highValue.prepend(QVariantMap{{"label", tr("WAF Saglayici Ipuclari")}, {"value", row.value("value").toString()}, {"kind", kind}});
+        } else if (kind == QLatin1String("host-pressure")) {
+            score += 1;
+            ++protectedSurface;
         } else if (kind == QLatin1String("automation-live-action")) {
             score += 6;
             ++jsSurface;

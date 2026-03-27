@@ -32,6 +32,7 @@ void ThemeEngine::setCurrentTheme(const QString &theme)
     }
 
     m_currentTheme = theme;
+    persistThemeState();
     emit currentThemeChanged();
 }
 
@@ -41,13 +42,15 @@ void ThemeEngine::loadSettings(SettingsManager *settings)
         return;
     }
 
+    m_settings = settings;
+
     const QStringList keys = {"window", "panel", "panelAlt", "border", "text", "mutedText", "accent", "accentSoft", "success", "warning", "danger"};
     for (const QString &key : keys) {
-        m_darkPalette.insert(key, settings->value("theme/dark", key, m_darkPalette.value(key)).toString());
-        m_lightPalette.insert(key, settings->value("theme/light", key, m_lightPalette.value(key)).toString());
+        m_darkPalette.insert(key, settings->typedValue("theme/dark", key, "string", m_darkPalette.value(key)).toString());
+        m_lightPalette.insert(key, settings->typedValue("theme/light", key, "string", m_lightPalette.value(key)).toString());
     }
 
-    const QString savedTheme = settings->value("theme", "currentTheme", m_currentTheme).toString();
+    const QString savedTheme = settings->typedValue("theme", "currentTheme", "string", m_currentTheme).toString();
     if (!savedTheme.isEmpty()) {
         m_currentTheme = savedTheme;
     }
@@ -61,9 +64,29 @@ void ThemeEngine::setPaletteValue(const QString &theme, const QString &key, cons
         m_darkPalette.insert(key, value);
     }
 
+    persistThemeState();
+
     if (theme == m_currentTheme) {
         emit currentThemeChanged();
     }
+}
+
+void ThemeEngine::persistThemeState()
+{
+    if (!m_settings) {
+        return;
+    }
+
+    m_settings->setTypedValue(QStringLiteral("theme"), QStringLiteral("currentTheme"), QStringLiteral("string"), m_currentTheme);
+    const QVariantMap darkPalette = m_darkPalette;
+    const QVariantMap lightPalette = m_lightPalette;
+    for (auto it = darkPalette.cbegin(); it != darkPalette.cend(); ++it) {
+        m_settings->setTypedValue(QStringLiteral("theme/dark"), it.key(), QStringLiteral("string"), it.value());
+    }
+    for (auto it = lightPalette.cbegin(); it != lightPalette.cend(); ++it) {
+        m_settings->setTypedValue(QStringLiteral("theme/light"), it.key(), QStringLiteral("string"), it.value());
+    }
+    m_settings->sync();
 }
 
 QVariantMap ThemeEngine::defaultPalette(const QString &theme) const

@@ -1,9 +1,15 @@
 #include "spiderwidget.h"
 
+#include "modules/spider/engine/spiderreportbuilder.h"
+#include "modules/spider/engine/spiderhostinsights.h"
 #include "modules/spider/engine/spiderworkflow.h"
 #include "modules/spider/spidermodule.h"
 #include "ui/layout/flowlayout.h"
 #include "ui/layout/workspacecontainers.h"
+#include "ui/views/spider/spiderhosthealthpanel.h"
+#include "ui/views/spider/spiderresultspanel.h"
+#include "ui/views/spider/spidersetuppanel.h"
+#include "ui/widgets/reportpreviewdialog.h"
 
 #include <QCursor>
 #include <QDateTime>
@@ -17,6 +23,9 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QListWidget>
 #include <QPageLayout>
 #include <QPageSize>
@@ -28,6 +37,8 @@
 #include <QColor>
 #include <QComboBox>
 #include <QRegularExpression>
+#include <QScrollArea>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QStringConverter>
 #include <QSpinBox>
@@ -244,56 +255,40 @@ QString sanitizedFileStem(QString text)
 
 QString spiderReportFileName(const QString &target, const QString &extension)
 {
-    return QStringLiteral("pengufoce-spider-kesif-raporu-%1-v1.0-%2.%3")
-        .arg(sanitizedFileStem(target),
-             QDate::currentDate().toString(QStringLiteral("yyyyMMdd")),
-             extension);
+    return ::spiderReportFileName(target, extension);
 }
 
 QString spiderReportDefaultPath(const QString &target, const QString &extension)
 {
-    QString baseDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    if (baseDir.trimmed().isEmpty()) {
-        baseDir = QDir::currentPath();
+    return ::spiderReportDefaultPath(target, extension);
+}
+
+QString hostFromSpiderAsset(const QVariantMap &asset)
+{
+    const QString kind = asset.value("kind").toString();
+    const QString sourceHost = QUrl(asset.value("source").toString()).host().toLower().trimmed();
+    if (!sourceHost.isEmpty()) {
+        return sourceHost;
     }
-    return QDir(baseDir).filePath(spiderReportFileName(target, extension));
+
+    const QString valueText = asset.value("value").toString();
+    if (kind == QLatin1String("host-pressure")
+        || kind == QLatin1String("retry-after")
+        || kind == QLatin1String("retry-scheduled"))
+    {
+        const QRegularExpression hostRegex(QStringLiteral("host=([^|]+)"));
+        const auto match = hostRegex.match(valueText);
+        if (match.hasMatch()) {
+            return match.captured(1).trimmed().toLower();
+        }
+    }
+
+    return QObject::tr("(bilinmiyor)");
 }
 
 bool saveSpiderPdfReport(const QString &path, const QString &html, QString *errorMessage)
 {
-    QString resolvedPath = path.trimmed();
-    if (resolvedPath.isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = QObject::tr("Gecerli bir dosya yolu secilmedi.");
-        }
-        return false;
-    }
-    if (!resolvedPath.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive)) {
-        resolvedPath += QStringLiteral(".pdf");
-    }
-
-    {
-        QPdfWriter writer(resolvedPath);
-        writer.setResolution(144);
-        writer.setPageSize(QPageSize(QPageSize::A4));
-        writer.setPageMargins(QMarginsF(18, 18, 18, 18), QPageLayout::Millimeter);
-        writer.setTitle(QObject::tr("PenguFoce Spider Kesif Raporu"));
-
-        QTextDocument document;
-        document.setDocumentMargin(18.0);
-        document.setHtml(html);
-        document.setPageSize(writer.pageLayout().paintRectPixels(writer.resolution()).size());
-        document.print(&writer);
-    }
-
-    const QFileInfo info(resolvedPath);
-    if (!info.exists() || info.size() <= 0) {
-        if (errorMessage) {
-            *errorMessage = QObject::tr("PDF dosyasi olusturulamadi.");
-        }
-        return false;
-    }
-    return true;
+    return ::saveSpiderPdfReport(path, html, errorMessage);
 }
 
 bool shouldSuppressReportAsset(const QVariantMap &row)
@@ -314,55 +309,6 @@ bool shouldSuppressReportAsset(const QVariantMap &row)
     return false;
 }
 
-class SpiderReportPreviewDialog : public QDialog
-{
-public:
-    explicit SpiderReportPreviewDialog(QWidget *parent = nullptr)
-        : QDialog(parent)
-    {
-        setWindowTitle(QObject::tr("Spider PDF Onizleme"));
-        resize(980, 780);
-
-        auto *layout = new QVBoxLayout(this);
-        layout->setContentsMargins(16, 16, 16, 16);
-        layout->setSpacing(12);
-
-        auto *title = new QLabel(QObject::tr("Spider Kesif Raporu Onizlemesi"), this);
-        title->setObjectName("sectionTitle");
-        auto *info = new QLabel(QObject::tr("Bu pencere Spider kesif raporunun PDF onizlemesini gosterir. Kaydetme islemleri sadece burada yapilir."), this);
-        info->setObjectName("mutedText");
-        info->setWordWrap(true);
-        layout->addWidget(title);
-        layout->addWidget(info);
-
-        m_view = new QTextEdit(this);
-        m_view->setReadOnly(true);
-        m_view->setStyleSheet("QTextEdit { background: #ffffff; color: #171a20; border: 1px solid #c7cdd8; border-radius: 10px; padding: 20px; }");
-        layout->addWidget(m_view, 1);
-
-        auto *buttons = new QHBoxLayout();
-        m_savePdfButton = new QPushButton(QObject::tr("PDF Kaydet"), this);
-        m_saveHtmlButton = new QPushButton(QObject::tr("HTML Kaydet"), this);
-        auto *closeButton = new QPushButton(QObject::tr("Kapat"), this);
-        buttons->addStretch();
-        buttons->addWidget(m_savePdfButton);
-        buttons->addWidget(m_saveHtmlButton);
-        buttons->addWidget(closeButton);
-        layout->addLayout(buttons);
-
-        connect(closeButton, &QPushButton::clicked, this, &QDialog::accept);
-    }
-
-    QTextEdit *view() const { return m_view; }
-    QPushButton *savePdfButton() const { return m_savePdfButton; }
-    QPushButton *saveHtmlButton() const { return m_saveHtmlButton; }
-
-private:
-    QTextEdit *m_view = nullptr;
-    QPushButton *m_savePdfButton = nullptr;
-    QPushButton *m_saveHtmlButton = nullptr;
-};
-
 }
 
 SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
@@ -379,7 +325,18 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     connect(m_stateWatchdogTimer, &QTimer::timeout, this, &SpiderWidget::pollStalledState);
     m_stateWatchdogTimer->start();
 
-    auto *root = new QVBoxLayout(this);
+    auto *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    auto *page = new QWidget(scrollArea);
+    auto *root = new QVBoxLayout(page);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(18);
 
@@ -404,9 +361,9 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     auto *statusCard = makeSpiderInfoBlock(hero, tr("Durum"), &m_statusValue);
     auto *countsCard = makeSpiderInfoBlock(hero, tr("Gezilen / Kuyruk"), &m_countsValue);
     auto *coverageCard = makeSpiderInfoBlock(hero, tr("Yuzey Puani"), &m_coverageValue);
-    statusCard->setMinimumWidth(132);
-    countsCard->setMinimumWidth(132);
-    coverageCard->setMinimumWidth(132);
+    statusCard->setMinimumWidth(116);
+    countsCard->setMinimumWidth(116);
+    coverageCard->setMinimumWidth(116);
     summary->addWidget(statusCard);
     summary->addWidget(countsCard);
     summary->addWidget(coverageCard);
@@ -441,281 +398,83 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     heroLayout->addWidget(m_coverageSummaryLabel);
     heroLayout->addWidget(m_coverageBreakdownLabel);
     heroLayout->addWidget(m_automationLabel);
+    m_hostHealthSummaryLabel = new QLabel(hero);
+    m_hostHealthSummaryLabel->setObjectName("mutedText");
+    m_hostHealthSummaryLabel->setWordWrap(true);
+    heroLayout->addWidget(m_hostHealthSummaryLabel);
     heroLayout->addWidget(m_insightLabel);
 
-    auto *setupCard = new QFrame(this);
-    setupCard->setObjectName("cardPanel");
-    auto *setupLayout = new QGridLayout(setupCard);
-    setupLayout->setContentsMargins(20, 20, 20, 20);
-    setupLayout->setHorizontalSpacing(16);
-    setupLayout->setVerticalSpacing(12);
-    setupLayout->setColumnStretch(1, 1);
-
-    m_targetEdit = new QLineEdit(setupCard);
-    m_stageCombo = new QComboBox(setupCard);
-    m_maxPagesSpin = new QSpinBox(setupCard);
-    m_maxDepthSpin = new QSpinBox(setupCard);
-    m_timeoutSpin = new QSpinBox(setupCard);
-    m_scopePresetCombo = new QComboBox(setupCard);
-    m_allowSubdomainsCheck = new QCheckBox(tr("Alt alan adlarini da tara"), setupCard);
-    m_includePatternsEdit = new QPlainTextEdit(setupCard);
-    m_excludePatternsEdit = new QPlainTextEdit(setupCard);
-    m_loginUrlEdit = new QLineEdit(setupCard);
-    m_authUsernameEdit = new QLineEdit(setupCard);
-    m_authPasswordEdit = new QLineEdit(setupCard);
-    m_usernameFieldEdit = new QLineEdit(setupCard);
-    m_passwordFieldEdit = new QLineEdit(setupCard);
-    m_csrfFieldEdit = new QLineEdit(setupCard);
-    m_authWorkflowPresetCombo = new QComboBox(setupCard);
-    m_authWorkflowHintLabel = new QLabel(setupCard);
-    m_workflowValidationLabel = new QLabel(setupCard);
-    m_applyWorkflowPresetButton = new QPushButton(tr("Workflow Uygula"), setupCard);
-    m_authWorkflowEdit = new QPlainTextEdit(setupCard);
-    m_stageCombo->addItem(tr("1. Asama - Hizli Kesif"));
-    m_stageCombo->addItem(tr("2. Asama - Oturumlu Tarama"));
-    m_stageCombo->addItem(tr("3. Asama - Uzman Politikasi"));
-    m_scopePresetCombo->addItem(tr("Guvenli"), QStringLiteral("guvenli"));
-    m_scopePresetCombo->addItem(tr("Dengeli"), QStringLiteral("dengeli"));
-    m_scopePresetCombo->addItem(tr("Agresif"), QStringLiteral("agresif"));
-    m_maxPagesSpin->setRange(5, 250);
-    m_maxPagesSpin->setSingleStep(5);
-    m_maxDepthSpin->setRange(1, 10);
-    m_timeoutSpin->setRange(800, 10000);
-    m_timeoutSpin->setSingleStep(200);
-    m_authPasswordEdit->setEchoMode(QLineEdit::Password);
-    m_authWorkflowPresetCombo->addItem(tr("Ozel Workflow"), QStringLiteral("custom"));
-    m_authWorkflowPresetCombo->addItem(tr("Temel Login"), QStringLiteral("basic-login"));
-    m_authWorkflowPresetCombo->addItem(tr("CSRF Login"), QStringLiteral("csrf-login"));
-    m_authWorkflowPresetCombo->addItem(tr("Cok Adimli Panel"), QStringLiteral("multi-panel"));
-    m_authWorkflowPresetCombo->addItem(tr("API Console"), QStringLiteral("api-console"));
-    m_authWorkflowHintLabel->setObjectName("mutedText");
-    m_authWorkflowHintLabel->setWordWrap(true);
-    m_workflowValidationLabel->setObjectName("mutedText");
-    m_workflowValidationLabel->setWordWrap(true);
-    m_includePatternsEdit->setMaximumHeight(72);
-    m_excludePatternsEdit->setMaximumHeight(72);
-    m_authWorkflowEdit->setMaximumHeight(96);
-    m_includePatternsEdit->setPlaceholderText(tr("Her satira bir regex include kurali"));
-    m_excludePatternsEdit->setPlaceholderText(tr("Her satira bir regex exclude kurali"));
-    m_authWorkflowEdit->setPlaceholderText(tr("Her satir: url|POST|form|username={{username}}|password={{password}}|header:X-Test=1|expect=!login|expect=header:location|expect=cookie:PHPSESSID|expect=redirect:/panel|expect=!redirect:login"));
-    setupLayout->addWidget(createInfoLabel(tr("Seed URL"), tr("Spider taramaya bu URL ile baslar ve yalnizca ayni hedef kapsaminda kalir.")), 0, 0);
-    setupLayout->addWidget(m_targetEdit, 0, 1);
-    setupLayout->addWidget(createInfoLabel(tr("Tarama Asamasi"), tr("1. asama hizli link kesfi, 2. asama oturum ve cookie, 3. asama tam politika ve field mapping icindir.")), 0, 2);
-    setupLayout->addWidget(m_stageCombo, 0, 3);
-    setupLayout->addWidget(createInfoLabel(tr("Maksimum Sayfa"), tr("Sonsuz donguleri sinirlamak icin gezilecek ust limit.")), 1, 0);
-    setupLayout->addWidget(m_maxPagesSpin, 1, 1);
-    setupLayout->addWidget(createInfoLabel(tr("Derinlik"), tr("Seed URL'den sonra kac seviye ic link takip edilecegini belirler.")), 1, 2);
-    setupLayout->addWidget(m_maxDepthSpin, 1, 3);
-    setupLayout->addWidget(createInfoLabel(tr("Timeout ms"), tr("Yavas hedeflerde spider'in takilmamasi icin istek zaman asimi.")), 2, 0);
-    setupLayout->addWidget(m_timeoutSpin, 2, 1);
-    setupLayout->addWidget(createInfoLabel(tr("Scope Profili"), tr("Google font, analytics ve benzeri ucuncu taraf gurultuyu otomatik filtreleyen hazir politika seti.")), 2, 2);
-    setupLayout->addWidget(m_scopePresetCombo, 2, 3);
-
-    m_scopeCard = new QFrame(setupCard);
-    m_scopeCard->setObjectName("summaryCard");
-    m_scopeCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *scopeLayout = new QGridLayout(m_scopeCard);
-    scopeLayout->setContentsMargins(14, 14, 14, 14);
-    scopeLayout->setHorizontalSpacing(12);
-    scopeLayout->setVerticalSpacing(10);
-    scopeLayout->setColumnStretch(1, 1);
-    scopeLayout->addWidget(createInfoLabel(tr("Alt Alan Adlari"), tr("Ayni ana host altindaki subdomain'ler de kapsam icine alinabilir.")), 0, 0);
-    scopeLayout->addWidget(m_allowSubdomainsCheck, 0, 1);
-    auto *scopePresetInfo = new QLabel(scopePresetDescription(QStringLiteral("dengeli")), m_scopeCard);
-    scopePresetInfo->setObjectName("mutedText");
-    scopePresetInfo->setWordWrap(true);
-    scopeLayout->addWidget(createInfoLabel(tr("Filtre Aciklamasi"), tr("Hazir scope profili ucuncu taraf servisleri ve gosterim gurultusunu temizler.")), 1, 0);
-    scopeLayout->addWidget(scopePresetInfo, 1, 1);
-    scopeLayout->addWidget(createInfoLabel(tr("Include Kurallari"), tr("Bos birakilirsa tum scope taranir. Her satir bir regex include kuralidir.")), 2, 0);
-    scopeLayout->addWidget(m_includePatternsEdit, 2, 1);
-    scopeLayout->addWidget(createInfoLabel(tr("Exclude Kurallari"), tr("Logout, signout, destroy ve hassas cikis akislari burada dislanabilir. Scope profili secildiginde Google font benzeri gurultu filtreleri de otomatik eklenir.")), 3, 0);
-    scopeLayout->addWidget(m_excludePatternsEdit, 3, 1);
-    scopeLayout->setRowStretch(4, 1);
-
-    m_authCard = new QFrame(setupCard);
-    m_authCard->setObjectName("summaryCard");
-    m_authCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *authLayout = new QGridLayout(m_authCard);
-    authLayout->setContentsMargins(14, 14, 14, 14);
-    authLayout->setHorizontalSpacing(12);
-    authLayout->setVerticalSpacing(10);
-    authLayout->setColumnStretch(1, 1);
-    authLayout->addWidget(createInfoLabel(tr("Login URL"), tr("Kimlik dogrulama gerekiyorsa spider once bu sayfada giris akisini dener.")), 0, 0);
-    authLayout->addWidget(m_loginUrlEdit, 0, 1);
-    authLayout->addWidget(createInfoLabel(tr("Kullanici"), tr("Auth-aware crawl icin kullanici adi veya e-posta alani.")), 1, 0);
-    authLayout->addWidget(m_authUsernameEdit, 1, 1);
-    authLayout->addWidget(createInfoLabel(tr("Parola"), tr("Sadece gerekli test ortamlarinda kullan. Mevcut oturum ve cookie devamliligi icin kullanilir.")), 2, 0);
-    authLayout->addWidget(m_authPasswordEdit, 2, 1);
-    authLayout->setRowStretch(3, 1);
-
-    m_advancedCard = new QFrame(setupCard);
-    m_advancedCard->setObjectName("summaryCard");
-    m_advancedCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *advancedLayout = new QGridLayout(m_advancedCard);
-    advancedLayout->setContentsMargins(14, 14, 14, 14);
-    advancedLayout->setHorizontalSpacing(12);
-    advancedLayout->setVerticalSpacing(10);
-    advancedLayout->setColumnStretch(1, 1);
-    advancedLayout->addWidget(createInfoLabel(tr("Kullanici Alan Adi"), tr("Login formundaki username alaninin name degeri.")), 0, 0);
-    advancedLayout->addWidget(m_usernameFieldEdit, 0, 1);
-    advancedLayout->addWidget(createInfoLabel(tr("Parola Alan Adi"), tr("Login formundaki password alaninin name degeri.")), 1, 0);
-    advancedLayout->addWidget(m_passwordFieldEdit, 1, 1);
-    advancedLayout->addWidget(createInfoLabel(tr("CSRF Alan Adi"), tr("Login formunda anti-CSRF token varsa name degeri.")), 2, 0);
-    advancedLayout->addWidget(m_csrfFieldEdit, 2, 1);
-    advancedLayout->addWidget(createInfoLabel(tr("Workflow Preseti"), tr("Hazir auth akisi secip editoru doldurur. Relative URL, @current, optional, delay ve label desteklenir.")), 3, 0);
-    auto *workflowPresetHost = new QWidget(setupCard);
-    auto *workflowPresetRow = new FlowLayout(workflowPresetHost, 0, 8, 8);
-    workflowPresetRow->addWidget(m_authWorkflowPresetCombo);
-    workflowPresetRow->addWidget(m_applyWorkflowPresetButton);
-    workflowPresetHost->setLayout(workflowPresetRow);
-    advancedLayout->addWidget(workflowPresetHost, 3, 1);
-    advancedLayout->addWidget(m_authWorkflowHintLabel, 4, 1);
-    advancedLayout->addWidget(m_workflowValidationLabel, 5, 1);
-    advancedLayout->addWidget(createInfoLabel(tr("Workflow Adimlari"), tr("Cok adimli auth icin her satira bir adim yaz. Ek kurallar: label=..., delay=350, optional, expect=status:302, expect=url:/panel, expect=body:Welcome, expect=!login")), 6, 0);
-    advancedLayout->addWidget(m_authWorkflowEdit, 6, 1);
-    advancedLayout->setRowStretch(7, 1);
-
-    auto *buttonHost = new QWidget(setupCard);
-    auto *buttonRow = new FlowLayout(buttonHost, 0, 10, 10);
-    m_startButton = new QPushButton(tr("Spider Baslat"), setupCard);
-    m_startButton->setObjectName("accentButton");
-    m_stopButton = new QPushButton(tr("Durdur"), setupCard);
-    buttonRow->addWidget(m_startButton);
-    buttonRow->addWidget(m_stopButton);
-    buttonHost->setLayout(buttonRow);
-    setupLayout->addWidget(buttonHost, 3, 0, 1, 4);
-
-    auto *consoleCard = new QFrame(this);
-    consoleCard->setObjectName("cardPanel");
-    auto *consoleLayout = new QVBoxLayout(consoleCard);
-    consoleLayout->setContentsMargins(20, 20, 20, 20);
-    consoleLayout->setSpacing(12);
-    auto *consoleTitle = new QLabel(tr("Canli Spider Konsolu"), consoleCard);
-    consoleTitle->setObjectName("sectionTitle");
-    auto *consoleInfo = new QLabel(tr("Canli akis"), consoleCard);
-    consoleInfo->setObjectName("mutedText");
-    consoleInfo->setWordWrap(true);
-    m_console = new QPlainTextEdit(consoleCard);
-    m_console->setReadOnly(true);
-    m_console->setMinimumHeight(148);
-    m_console->setLineWrapMode(QPlainTextEdit::NoWrap);
-    consoleLayout->addWidget(consoleTitle);
-    consoleLayout->addWidget(consoleInfo);
-    consoleLayout->addWidget(m_console);
-
-    auto *evidenceCard = makeListCard(this,
-                                      tr("Oturum ve Kanit Izleri"),
-                                      tr("Auth denemeleri, request/response ozetleri, redirect zinciri ve response imzalari burada gorunur."),
-                                      &m_evidenceList);
-    auto *evidenceCardLayout = qobject_cast<QVBoxLayout *>(evidenceCard->layout());
-    m_assetFilterCombo = new QComboBox(evidenceCard);
-    m_assetFilterCombo->addItem(tr("Tum Kanitlar"), QStringLiteral("all"));
-    m_assetFilterCombo->addItem(tr("Sadece Auth"), QStringLiteral("auth"));
-    m_assetFilterCombo->addItem(tr("Sadece Redirect"), QStringLiteral("redirect"));
-    m_assetFilterCombo->addItem(tr("Sadece Imza"), QStringLiteral("signature"));
-    m_assetFilterCombo->addItem(tr("Sadece Workflow"), QStringLiteral("workflow"));
-    m_assetFilterCombo->addItem(tr("Sadece WAF"), QStringLiteral("waf"));
-    m_assetFilterCombo->addItem(tr("Sadece Baskilanan"), QStringLiteral("suppressed"));
-    m_assetFilterCombo->addItem(tr("Sadece Render"), QStringLiteral("render"));
-    m_assetFilterCombo->addItem(tr("Sadece Automation"), QStringLiteral("automation"));
-    evidenceCardLayout->insertWidget(2, m_assetFilterCombo);
-    m_evidenceDetailView = new QTextEdit(evidenceCard);
-    m_evidenceDetailView->setReadOnly(true);
-    m_evidenceDetailView->setMinimumHeight(120);
-    m_evidenceDetailView->setHtml(tr("<h3>Kanit detayi</h3><p>Bir kayit sec.</p>"));
-    evidenceCardLayout->addWidget(m_evidenceDetailView);
-
-    auto *resultsTabs = new QTabWidget(this);
-    resultsTabs->setDocumentMode(true);
-    resultsTabs->setUsesScrollButtons(true);
-    auto *endpointCard = makeListCard(this,
-                                      tr("Bulunan Endpoint'ler"),
-                                      tr("Href, form action, robots ve sitemap kaynakli endpoint listesi."),
-                                      &m_endpointList);
-    auto *endpointCardLayout = qobject_cast<QVBoxLayout *>(endpointCard->layout());
-    m_endpointFilterCombo = new QComboBox(endpointCard);
-    m_endpointFilterCombo->addItem(tr("Tum Endpoint'ler"), QStringLiteral("all"));
-    m_endpointFilterCombo->addItem(tr("Sadece Login/Form"), QStringLiteral("forms"));
-    m_endpointFilterCombo->addItem(tr("Sadece Oturum Sonrasi"), QStringLiteral("delta"));
-    m_endpointFilterCombo->addItem(tr("Sadece JS Route"), QStringLiteral("js"));
-    m_endpointFilterCombo->addItem(tr("Sadece Korunan Yuzey"), QStringLiteral("protected"));
-    m_endpointFilterCombo->addItem(tr("Sadece Bulunamayan Yollar"), QStringLiteral("missing"));
-    endpointCardLayout->insertWidget(2, m_endpointFilterCombo);
-    resultsTabs->addTab(endpointCard, tr("Yuzey"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Parametreler"),
-                                     QString(),
-                                     &m_parameterList),
-                        tr("Girdi"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Asset ve Scriptler"),
-                                     QString(),
-                                     &m_assetList),
-                        tr("Asset"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Kritik Yuzey"),
-                                     QString(),
-                                     &m_highValueList),
-                        tr("Kritik"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Segmentler"),
-                                     QString(),
-                                     &m_segmentList),
-                        tr("Segmentler"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Benchmark"),
-                                     QString(),
-                                     &m_benchmarkHistoryList),
-                        tr("Benchmark"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Timeline"),
-                                     QString(),
-                                     &m_timelineList),
-                        tr("Timeline"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Host Sagligi"),
-                                     tr("WAF, baskilama ve scope disi davranislara gore host bazli ozet."),
-                                     &m_hostHealthList),
-                        tr("Host"));
-    resultsTabs->addTab(makeListCard(this,
-                                     tr("Ozellikler"),
-                                     QString(),
-                                     &m_featureList),
-                        tr("Ozellikler"));
-
-    auto *liveTab = new QWidget(this);
-    auto *liveLayout = new QHBoxLayout(liveTab);
-    liveLayout->setContentsMargins(0, 0, 0, 0);
-    liveLayout->setSpacing(18);
-    liveLayout->addWidget(consoleCard, 3);
-    liveLayout->addWidget(evidenceCard, 2);
+    auto *setupPanel = new SpiderSetupPanel(this);
+    m_targetEdit = setupPanel->targetEdit();
+    m_stageCombo = setupPanel->stageCombo();
+    m_maxPagesSpin = setupPanel->maxPagesSpin();
+    m_maxDepthSpin = setupPanel->maxDepthSpin();
+    m_timeoutSpin = setupPanel->timeoutSpin();
+    m_scopePresetCombo = setupPanel->scopePresetCombo();
+    m_allowSubdomainsCheck = setupPanel->allowSubdomainsCheck();
+    m_includePatternsEdit = setupPanel->includePatternsEdit();
+    m_excludePatternsEdit = setupPanel->excludePatternsEdit();
+    m_loginUrlEdit = setupPanel->loginUrlEdit();
+    m_authUsernameEdit = setupPanel->authUsernameEdit();
+    m_authPasswordEdit = setupPanel->authPasswordEdit();
+    m_usernameFieldEdit = setupPanel->usernameFieldEdit();
+    m_passwordFieldEdit = setupPanel->passwordFieldEdit();
+    m_csrfFieldEdit = setupPanel->csrfFieldEdit();
+    m_authWorkflowPresetCombo = setupPanel->authWorkflowPresetCombo();
+    m_authWorkflowHintLabel = setupPanel->authWorkflowHintLabel();
+    m_workflowValidationLabel = setupPanel->workflowValidationLabel();
+    m_applyWorkflowPresetButton = setupPanel->applyWorkflowPresetButton();
+    m_authWorkflowEdit = setupPanel->authWorkflowEdit();
+    m_startButton = setupPanel->startButton();
+    m_stopButton = setupPanel->stopButton();
+    m_scopeCard = setupPanel->scopeCard();
+    m_authCard = setupPanel->authCard();
+    m_advancedCard = setupPanel->advancedCard();
+    if (setupPanel->scopePresetInfoLabel()) {
+        setupPanel->scopePresetInfoLabel()->setText(scopePresetDescription(QStringLiteral("dengeli")));
+    }
 
     auto *setupTab = new QWidget(this);
     auto *setupTabLayout = new QVBoxLayout(setupTab);
     setupTabLayout->setContentsMargins(0, 0, 0, 0);
     setupTabLayout->setSpacing(14);
-    auto *detailHost = new QWidget(setupTab);
-    auto *detailRow = new FlowLayout(detailHost, 0, 12, 12);
-    m_scopeCard->setMinimumWidth(220);
-    m_authCard->setMinimumWidth(220);
-    m_advancedCard->setMinimumWidth(260);
-    detailRow->addWidget(m_scopeCard);
-    detailRow->addWidget(m_authCard);
-    detailRow->addWidget(m_advancedCard);
-    detailHost->setLayout(detailRow);
-    setupTabLayout->addWidget(setupCard);
-    setupTabLayout->addWidget(detailHost);
+    setupTabLayout->addWidget(setupPanel);
     setupTabLayout->addStretch();
 
-    m_workTabs = new QTabWidget(this);
-    m_workTabs->setDocumentMode(true);
-    m_workTabs->setUsesScrollButtons(true);
-    m_workTabs->addTab(setupTab, tr("Kurulum"));
-    m_workTabs->addTab(liveTab, tr("Canli"));
-    m_workTabs->addTab(resultsTabs, tr("Sonuclar"));
+    auto *resultsPanel = new SpiderResultsPanel(this);
+    m_console = resultsPanel->console();
+    m_assetFilterCombo = resultsPanel->assetFilterCombo();
+    m_evidenceList = resultsPanel->evidenceList();
+    m_evidenceDetailView = resultsPanel->evidenceDetailView();
+    m_endpointFilterCombo = resultsPanel->endpointFilterCombo();
+    m_endpointList = resultsPanel->endpointList();
+    m_parameterList = resultsPanel->parameterList();
+    m_assetList = resultsPanel->assetList();
+    m_highValueList = resultsPanel->highValueList();
+    m_segmentList = resultsPanel->segmentList();
+    m_benchmarkHistoryList = resultsPanel->benchmarkHistoryList();
+    m_timelineList = resultsPanel->timelineList();
+    m_featureList = resultsPanel->featureList();
+    if (auto *hostCard = qobject_cast<SpiderHostHealthPanel *>(resultsPanel->hostPanel())) {
+        m_hostHealthList = hostCard->hostHealthList();
+        m_hostTimelineList = hostCard->hostTimelineList();
+        m_hostFilterCombo = hostCard->hostFilterCombo();
+        m_exportHostDiagnosticsButton = hostCard->exportHostDiagnosticsButton();
+        m_hostStableValue = hostCard->hostStableValue();
+        m_hostGuardedValue = hostCard->hostGuardedValue();
+        m_hostWafValue = hostCard->hostWafValue();
+        m_hostStressedValue = hostCard->hostStressedValue();
+        m_hostReplayDiffLabel = hostCard->hostReplayDiffLabel();
+        m_hostPressureTrendLabel = hostCard->hostPressureTrendLabel();
+    }
+    resultsPanel->setSetupTab(setupTab);
+    m_workTabs = resultsPanel->workTabs();
 
     root->addWidget(hero);
-    root->addWidget(m_workTabs, 1);
+    root->addWidget(resultsPanel, 1);
+    page->setLayout(root);
+    scrollArea->setWidget(page);
+    outerLayout->addWidget(scrollArea);
 
     connect(m_startButton, &QPushButton::clicked, this, &SpiderWidget::startSpider);
     connect(m_stopButton, &QPushButton::clicked, this, &SpiderWidget::stopSpider);
@@ -731,8 +490,10 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
         connect(m_module, &SpiderModule::statusChanged, this, &SpiderWidget::scheduleStatsRefresh);
     }
     connect(m_evidenceList, &QListWidget::currentItemChanged, this, &SpiderWidget::updateEvidenceDetail);
-    connect(m_scopePresetCombo, &QComboBox::currentIndexChanged, this, [this, scopePresetInfo]() {
-        scopePresetInfo->setText(scopePresetDescription(m_scopePresetCombo->currentData().toString()));
+    connect(m_scopePresetCombo, &QComboBox::currentIndexChanged, this, [this, setupPanel]() {
+        if (setupPanel->scopePresetInfoLabel()) {
+            setupPanel->scopePresetInfoLabel()->setText(scopePresetDescription(m_scopePresetCombo->currentData().toString()));
+        }
     });
     connect(m_authWorkflowPresetCombo, &QComboBox::currentIndexChanged, this, &SpiderWidget::applyWorkflowPreset);
     connect(m_applyWorkflowPresetButton, &QPushButton::clicked, this, [this]() {
@@ -743,6 +504,12 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     connect(m_endpointFilterCombo, &QComboBox::currentIndexChanged, this, &SpiderWidget::refreshFilteredResults);
     connect(m_assetFilterCombo, &QComboBox::currentIndexChanged, this, &SpiderWidget::refreshFilteredResults);
     connect(m_previewReportButton, &QPushButton::clicked, this, &SpiderWidget::exportReport);
+    if (m_hostFilterCombo) {
+        connect(m_hostFilterCombo, &QComboBox::currentIndexChanged, this, &SpiderWidget::refreshStats);
+    }
+    if (m_exportHostDiagnosticsButton) {
+        connect(m_exportHostDiagnosticsButton, &QPushButton::clicked, this, &SpiderWidget::exportHostDiagnostics);
+    }
 
     reloadSettings();
 }
@@ -1046,6 +813,8 @@ void SpiderWidget::updateEvidenceDetail()
         extra = tr("<p><b>Workflow:</b> Replay aday/sonuc zincirinin parcasi.</p>");
     } else if (kind == QLatin1String("waf-vendor")) {
         extra = tr("<p><b>Sinif:</b> WAF saglayici ipucu.</p>");
+    } else if (kind == QLatin1String("host-pressure")) {
+        extra = tr("<p><b>Sinif:</b> Host bazli baski ve backoff telemetrisi.</p>");
     } else if (kind == QLatin1String("crawl-suppressed")) {
         extra = tr("<p><b>Sinif:</b> Guvenlik nedeniyle baskilanan hedef.</p>");
     }
@@ -1130,7 +899,16 @@ bool SpiderWidget::assetMatchesFilter(const QListWidgetItem *item) const
         return kind.startsWith(QStringLiteral("workflow-")) || kind.startsWith(QStringLiteral("auth-step-"));
     }
     if (filter == QLatin1String("waf")) {
-        return kind == QLatin1String("waf-challenge") || kind == QLatin1String("waf-vendor");
+        return kind == QLatin1String("waf-challenge")
+            || kind == QLatin1String("waf-vendor")
+            || kind == QLatin1String("host-pressure")
+            || kind == QLatin1String("retry-after")
+            || kind == QLatin1String("retry-scheduled");
+    }
+    if (filter == QLatin1String("pressure")) {
+        return kind == QLatin1String("host-pressure")
+            || kind == QLatin1String("retry-after")
+            || kind == QLatin1String("retry-scheduled");
     }
     if (filter == QLatin1String("suppressed")) {
         return kind == QLatin1String("crawl-suppressed")
@@ -1190,6 +968,7 @@ void SpiderWidget::refreshLiveHeader()
     int workflowResults = 0;
     int wafHits = 0;
     int suppressedHits = 0;
+    int pressureHits = 0;
     for (const QVariant &value : m_module->assets()) {
         const QString kind = value.toMap().value("kind").toString();
         if (kind == QLatin1String("workflow-submit-candidate") || kind == QLatin1String("workflow-action-candidate")) {
@@ -1198,6 +977,8 @@ void SpiderWidget::refreshLiveHeader()
             ++workflowResults;
         } else if (kind == QLatin1String("waf-vendor") || kind == QLatin1String("waf-challenge")) {
             ++wafHits;
+        } else if (kind == QLatin1String("host-pressure") || kind == QLatin1String("retry-after") || kind == QLatin1String("retry-scheduled")) {
+            ++pressureHits;
         } else if (kind == QLatin1String("crawl-suppressed")
                    || kind == QLatin1String("scope-outlier")
                    || kind == QLatin1String("scope-excluded")) {
@@ -1217,12 +998,18 @@ void SpiderWidget::refreshLiveHeader()
             .arg(breakdown.value("missing").toInt())
             .arg(breakdown.value("render").toInt())
             .arg(breakdown.value("automation").toInt()));
-    m_automationLabel->setText(tr("Workflow aday %1 | replay sonuc %2 | WAF %3 | baskilanan hedef %4 | %5")
+    m_automationLabel->setText(tr("Workflow aday %1 | replay sonuc %2 | WAF %3 | pressure %4 | baskilanan hedef %5 | %6")
                                    .arg(workflowCandidates)
                                    .arg(workflowResults)
                                    .arg(wafHits)
+                                   .arg(pressureHits)
                                    .arg(suppressedHits)
                                    .arg(m_module->automationSafetyStatus()));
+    if (m_hostHealthSummaryLabel) {
+        m_hostHealthSummaryLabel->setText(tr("Host telemetrisi: WAF %1 | pressure %2 | retry/backoff olaylari canli host sagligi paneline islenir.")
+                                              .arg(wafHits)
+                                              .arg(pressureHits));
+    }
     m_benchmarkLabel->setText(m_module->benchmarkSummary());
     m_benchmarkDiffLabel->setText(m_module->benchmarkDiffSummary());
     m_regressionLabel->setText(m_module->regressionSummary());
@@ -1360,64 +1147,127 @@ void SpiderWidget::refreshStats()
     }
 
     if (m_hostHealthList) {
-        m_hostHealthList->clear();
-        struct HostRow {
-            int endpoints = 0;
-            int workflowHits = 0;
-            int wafHits = 0;
-            int suppressedHits = 0;
-            int scopeOutliers = 0;
-        };
-        QMap<QString, HostRow> hostRows;
-        for (const QVariant &value : m_module->endpoints()) {
-            const QVariantMap row = value.toMap();
-            const QUrl url(row.value("url").toString());
-            const QString host = url.host().trimmed().isEmpty() ? tr("(bilinmiyor)") : url.host().toLower();
-            hostRows[host].endpoints += 1;
-        }
-        for (const QVariant &value : m_module->assets()) {
-            const QVariantMap row = value.toMap();
-            const QString kind = row.value("kind").toString();
-            QString host = QUrl(row.value("source").toString()).host().toLower();
-            if (host.trimmed().isEmpty()) {
-                host = tr("(bilinmiyor)");
+        const SpiderHostInsightsSummary hostInsights = buildSpiderHostInsights(m_module->endpoints(), m_module->assets());
+
+        QString selectedHost = QStringLiteral("all");
+        if (m_hostFilterCombo) {
+            selectedHost = m_hostFilterCombo->currentData().toString();
+            QSignalBlocker blocker(m_hostFilterCombo);
+            m_hostFilterCombo->clear();
+            m_hostFilterCombo->addItem(tr("Tum Host'lar"), QStringLiteral("all"));
+            for (const SpiderHostInsightRow &row : hostInsights.rows) {
+                m_hostFilterCombo->addItem(row.host, row.host);
             }
-            if (kind.startsWith(QStringLiteral("workflow-")) || kind.startsWith(QStringLiteral("auth-step-"))) {
-                hostRows[host].workflowHits += 1;
-            } else if (kind == QLatin1String("waf-vendor") || kind == QLatin1String("waf-challenge")) {
-                hostRows[host].wafHits += 1;
-            } else if (kind == QLatin1String("crawl-suppressed")) {
-                hostRows[host].suppressedHits += 1;
-            } else if (kind == QLatin1String("scope-outlier") || kind == QLatin1String("scope-excluded")) {
-                hostRows[host].scopeOutliers += 1;
-            }
+            const int index = qMax(0, m_hostFilterCombo->findData(selectedHost));
+            m_hostFilterCombo->setCurrentIndex(index);
+            selectedHost = m_hostFilterCombo->currentData().toString();
         }
 
-        for (auto it = hostRows.cbegin(); it != hostRows.cend(); ++it) {
-            const HostRow &row = it.value();
-            QString health = tr("STABLE");
+        m_hostHealthList->clear();
+        QStringList replayDiffParts;
+        QStringList pressureTrendParts;
+        for (const SpiderHostInsightRow &row : hostInsights.rows) {
+            if (selectedHost != QLatin1String("all") && row.host != selectedHost) {
+                continue;
+            }
+
+            const QString pressureState = row.pressureState.isEmpty()
+                ? (row.pressureScore >= 8 ? tr("STRESSED")
+                   : (row.wafHits > 0 || row.pressureScore >= 5 ? tr("WAF")
+                      : (row.scopeOutliers > 0 ? tr("SCOPE")
+                         : ((row.suppressedHits > 0 || row.pressureScore > 0) ? tr("GUARDED") : tr("STABLE")))))
+                : row.pressureState;
             QColor tone = QColor("#87d4a3");
-            if (row.wafHits > 0) {
-                health = tr("WAF");
+            if (pressureState == QLatin1String("STRESSED")) {
+                tone = QColor("#ff8f8f");
+            } else if (pressureState == QLatin1String("WAF")) {
                 tone = QColor("#ffb26b");
-            } else if (row.scopeOutliers > 0) {
-                health = tr("SCOPE");
+            } else if (pressureState == QLatin1String("SCOPE")) {
                 tone = QColor("#9aa4b2");
-            } else if (row.suppressedHits > 0) {
-                health = tr("GUARDED");
+            } else if (pressureState == QLatin1String("GUARDED")) {
                 tone = QColor("#c8d0db");
             }
 
-            auto *item = new QListWidgetItem(QString("[%1] %2 | endpoint %3 | workflow %4 | waf %5 | suppressed %6 | scope %7")
-                                                 .arg(health,
-                                                      it.key(),
+            auto *item = new QListWidgetItem(QString("[%1] %2 | endpoint %3 | workflow %4 | waf %5 | pressure %6 (%7) | retry %8 | suppressed %9 | scope %10")
+                                                 .arg(pressureState,
+                                                      row.host,
                                                       QString::number(row.endpoints),
                                                       QString::number(row.workflowHits),
                                                       QString::number(row.wafHits),
+                                                      QString::number(row.pressureScore),
+                                                      pressureState,
+                                                      QString::number(row.retryScheduledCount),
                                                       QString::number(row.suppressedHits),
                                                       QString::number(row.scopeOutliers)));
+            QStringList tooltipLines;
+            if (!row.vendorHint.isEmpty()) {
+                tooltipLines << tr("WAF vendor: %1").arg(row.vendorHint);
+            }
+            if (!row.pressureReason.isEmpty()) {
+                tooltipLines << tr("Son pressure nedeni: %1").arg(row.pressureReason);
+            }
+            if (!row.retryDelay.isEmpty()) {
+                tooltipLines << tr("Son Retry-After: %1").arg(row.retryDelay);
+            }
+            if (!tooltipLines.isEmpty()) {
+                item->setToolTip(tooltipLines.join('\n'));
+            }
             item->setForeground(tone);
             m_hostHealthList->addItem(item);
+
+            if (row.workflowHits > 0 || row.workflowResultHits > 0) {
+                replayDiffParts << QStringLiteral("%1: aday %2 / sonuc %3")
+                                       .arg(row.host,
+                                            QString::number(row.workflowHits),
+                                            QString::number(row.workflowResultHits));
+            }
+            if (row.pressureScore > 0 || row.retryScheduledCount > 0) {
+                pressureTrendParts << QStringLiteral("%1: %2 (%3), retry %4")
+                                          .arg(row.host,
+                                               QString::number(row.pressureScore),
+                                               pressureState,
+                                               QString::number(row.retryScheduledCount));
+            }
+        }
+
+        if (m_hostStableValue) {
+            m_hostStableValue->setText(QString::number(hostInsights.stableHosts));
+        }
+        if (m_hostGuardedValue) {
+            m_hostGuardedValue->setText(QString::number(hostInsights.guardedHosts));
+        }
+        if (m_hostWafValue) {
+            m_hostWafValue->setText(QString::number(hostInsights.wafHosts));
+        }
+        if (m_hostStressedValue) {
+            m_hostStressedValue->setText(QString::number(hostInsights.stressedHosts));
+        }
+        if (m_hostReplayDiffLabel) {
+            m_hostReplayDiffLabel->setText(replayDiffParts.isEmpty()
+                                               ? tr("Replay farki: secili hostta sonuc ureten akÄ±s yok.")
+                                               : tr("Replay farki: %1").arg(replayDiffParts.join(QStringLiteral(" | "))));
+        }
+        if (m_hostPressureTrendLabel) {
+            m_hostPressureTrendLabel->setText(pressureTrendParts.isEmpty()
+                                                  ? tr("Pressure trend: secili host stabil.")
+                                                  : tr("Pressure trend: %1").arg(pressureTrendParts.join(QStringLiteral(" | "))));
+        }
+        if (m_hostTimelineList) {
+            m_hostTimelineList->clear();
+            if (selectedHost == QLatin1String("all")) {
+                for (const QString &entry : hostInsights.timelineEntries) {
+                    m_hostTimelineList->addItem(entry);
+                }
+            } else {
+                for (const SpiderHostInsightRow &row : hostInsights.rows) {
+                    if (row.host == selectedHost) {
+                        for (const QString &entry : row.timelineEntries) {
+                            m_hostTimelineList->addItem(entry);
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -1472,210 +1322,90 @@ QString SpiderWidget::buildReportHtml() const
         return {};
     }
 
-    QSet<QString> seenHighValue;
-    QString endpointHtml;
-    QSet<QString> seenEndpoints;
-    int protectedCount = 0;
-    int authDeltaCount = 0;
-    int missingCount = 0;
-    for (const QVariant &value : m_module->endpoints()) {
-        const QVariantMap row = value.toMap();
-        const QString key = QStringLiteral("%1|%2").arg(row.value("kind").toString(), row.value("url").toString());
-        if (seenEndpoints.contains(key)) {
-            continue;
-        }
-        seenEndpoints.insert(key);
-        const QString kind = row.value("kind").toString();
-        const int statusCode = row.value("statusCode").toInt();
-        const QString sessionState = row.value("sessionState").toString();
-        if (kind == QLatin1String("login-wall") || kind == QLatin1String("access-denied") || kind == QLatin1String("waf-challenge") || statusCode == 401 || statusCode == 403) {
-            ++protectedCount;
-        }
-        if (sessionState == QLatin1String("oturumlu-yeni-yuzey")) {
-            ++authDeltaCount;
-        }
-        if (kind == QLatin1String("soft-404") || statusCode == 404) {
-            ++missingCount;
-        }
-        endpointHtml += QString("<li><b>%1</b> - %2 (d%3, HTTP %4, %5)</li>")
-                            .arg(row.value("kind").toString().toHtmlEscaped(),
-                                 row.value("url").toString().toHtmlEscaped(),
-                                 row.value("depth").toString().toHtmlEscaped(),
-                                 row.value("statusCode").toString().toHtmlEscaped(),
-                                 row.value("sessionState").toString().toHtmlEscaped());
-    }
-    if (endpointHtml.isEmpty()) {
-        endpointHtml = QStringLiteral("<li>Endpoint kaydi bulunmadi.</li>");
-    }
-
-    QString parameterHtml;
-    for (const QVariant &value : m_module->parameters()) {
-        const QVariantMap row = value.toMap();
-        parameterHtml += QString("<li><b>%1</b> - %2 (%3)</li>")
-                             .arg(row.value("name").toString().toHtmlEscaped(),
-                                  row.value("url").toString().toHtmlEscaped(),
-                                  row.value("origin").toString().toHtmlEscaped());
-    }
-    if (parameterHtml.isEmpty()) {
-        parameterHtml = QStringLiteral("<li>Parametre veya form girdisi kaydi bulunmadi.</li>");
-    }
-
-    QString assetHtml;
-    QSet<QString> seenAssets;
-    int workflowCandidates = 0;
-    int workflowResults = 0;
-    int wafHits = 0;
-    int suppressedHits = 0;
-    for (const QVariant &value : m_module->assets()) {
-        const QVariantMap row = value.toMap();
-        if (shouldSuppressReportAsset(row)) {
-            continue;
-        }
-        const QString kind = row.value("kind").toString();
-        if (kind == QLatin1String("workflow-submit-candidate") || kind == QLatin1String("workflow-action-candidate")) {
-            ++workflowCandidates;
-        } else if (kind == QLatin1String("workflow-submit-result") || kind == QLatin1String("workflow-action-result")) {
-            ++workflowResults;
-        } else if (kind == QLatin1String("waf-vendor") || kind == QLatin1String("waf-challenge")) {
-            ++wafHits;
-        } else if (kind == QLatin1String("crawl-suppressed")
-                   || kind == QLatin1String("scope-outlier")
-                   || kind == QLatin1String("scope-excluded")) {
-            ++suppressedHits;
-        }
-        const QString key = QStringLiteral("%1|%2").arg(row.value("kind").toString(), row.value("value").toString());
-        if (seenAssets.contains(key)) {
-            continue;
-        }
-        seenAssets.insert(key);
-        assetHtml += QString("<li><b>%1</b> - %2 <span style='color:#5b6677'>(%3)</span></li>")
-                         .arg(row.value("kind").toString().toHtmlEscaped(),
-                              row.value("value").toString().toHtmlEscaped(),
-                              row.value("source").toString().toHtmlEscaped());
-    }
-    if (assetHtml.isEmpty()) {
-        assetHtml = QStringLiteral("<li>Asset veya literal kaydi bulunmadi.</li>");
-    }
-
-    QString highValueHtml;
-    for (const QVariant &value : m_module->highValueTargets()) {
-        const QVariantMap row = value.toMap();
-        const QString key = QStringLiteral("%1|%2").arg(row.value("label").toString(), row.value("value").toString());
-        if (seenHighValue.contains(key)) {
-            continue;
-        }
-        seenHighValue.insert(key);
-        highValueHtml += QString("<li><b>%1</b> - %2</li>")
-                             .arg(row.value("label").toString().toHtmlEscaped(),
-                                  row.value("value").toString().toHtmlEscaped());
-    }
-    if (highValueHtml.isEmpty()) {
-        highValueHtml = QStringLiteral("<li>Kritik yuzey kaydi bulunmadi.</li>");
-    }
-
-    QString timelineHtml;
-    for (const QVariant &value : m_module->coverageTimeline()) {
-        const QVariantMap row = value.toMap();
-        timelineHtml += QString("<li>[%1] <b>%2</b> - %3 <span style='color:#5b6677'>(%4)</span></li>")
-                            .arg(row.value("time").toString().toHtmlEscaped(),
-                                 row.value("title").toString().toHtmlEscaped(),
-                                 row.value("detail").toString().toHtmlEscaped(),
-                                 row.value("stage").toString().toHtmlEscaped());
-    }
-    if (timelineHtml.isEmpty()) {
-        timelineHtml = QStringLiteral("<li>Timeline kaydi bulunmadi.</li>");
-    }
-
-    QString historyHtml;
-    for (const QVariant &value : m_module->benchmarkHistory()) {
-        const QVariantMap row = value.toMap();
-        historyHtml += QString("<li><b>%1</b> - %2 | skor %3 | %4</li>")
-                           .arg(row.value("capturedAt").toString().toHtmlEscaped(),
-                                row.value("profile").toString().toHtmlEscaped(),
-                                row.value("coverageScore").toString().toHtmlEscaped(),
-                                row.value("summary").toString().toHtmlEscaped());
-        const QString diffSummary = row.value("diffSummary").toString();
-        if (!diffSummary.isEmpty()) {
-            historyHtml += QString("<li style='margin-left:18px;color:#5b6677;'>%1</li>").arg(diffSummary.toHtmlEscaped());
-        }
-        const QString regressionSummary = row.value("regressionSummary").toString();
-        if (!regressionSummary.isEmpty()) {
-            historyHtml += QString("<li style='margin-left:18px;color:#8f1732;'>%1</li>").arg(regressionSummary.toHtmlEscaped());
-        }
-    }
-    if (historyHtml.isEmpty()) {
-        historyHtml = QStringLiteral("<li>Benchmark gecmisi bulunmadi.</li>");
-    }
-
-    QString featureHtml;
-    if (m_featureList && m_featureList->count() > 0) {
+    QStringList features;
+    if (m_featureList) {
         for (int i = 0; i < m_featureList->count(); ++i) {
-            featureHtml += QString("<li>%1</li>").arg(m_featureList->item(i)->text().toHtmlEscaped());
+            features.push_back(m_featureList->item(i)->text());
         }
     }
-    if (featureHtml.isEmpty()) {
-        featureHtml = QStringLiteral("<li>Ozellik listesi hazir degil.</li>");
+    return buildSpiderReportHtml(*m_module, features);
+}
+
+void SpiderWidget::exportHostDiagnostics()
+{
+    if (!m_module) {
+        return;
     }
 
-    const QVariantMap breakdown = m_module->coverageBreakdown();
-    const QString operationalSummary = QStringLiteral("Korunan yuzey %1 | oturum sonrasi yeni yuzey %2 | 404/soft-404 %3")
-                                           .arg(protectedCount)
-                                           .arg(authDeltaCount)
-                                           .arg(missingCount);
-    const QString workflowSummary = QStringLiteral("Workflow aday %1 | replay sonuc %2 | WAF %3 | baskilanan/scope %4")
-                                        .arg(workflowCandidates)
-                                        .arg(workflowResults)
-                                        .arg(wafHits)
-                                        .arg(suppressedHits);
-    return QString(
-        "<html><body style='font-family:Bahnschrift;font-size:12pt;line-height:1.45;padding:0;color:#171a20;'>"
-        "<div style='border-bottom:2px solid #8f1732;padding-bottom:12px;margin-bottom:18px;'>"
-        "<h1 style='margin:0;font-size:24pt;'>PenguFoce Spider Kesif Raporu</h1>"
-        "<p style='margin:8px 0 0 0;font-size:11pt;'><b>Hedef:</b> %1<br><b>Rapor Tarihi:</b> %2<br><b>Scope Profili:</b> %3</p>"
-        "</div>"
-        "<h2 style='font-size:16pt;'>1. Yonetici Ozeti</h2>"
-        "<p>Spider modulu hedef yuzeyi asenkron crawl, oturum fark analizi ve rendered DOM kesfi ile taradi. Son coverage puani <b>%4/100</b> olarak hesaplandi.</p>"
-        "<p><b>Coverage Ozeti:</b> %5<br><b>Automation:</b> %6<br><b>Benchmark:</b> %7<br><b>Kiyas:</b> %8<br><b>Regression:</b> %9</p>"
-        "<p><b>Operasyonel Ozet:</b> %10<br><b>Workflow/WAF Ozeti:</b> %29</p>"
-        "<h2 style='font-size:16pt;'>2. Aktif Spider Yetenekleri</h2><ul>%11</ul>"
-        "<h2 style='font-size:16pt;'>3. Coverage Kirilimi</h2>"
-        "<p>auth %12 | form %13 | js %14 | secret %15 | admin %16 | upload %17 | delta %18 | korunan %19 | 404 %20 | render %21 | automation %22</p>"
-        "<h2 style='font-size:16pt;'>4. Yuksek Degerli Yuzey</h2><ul>%23</ul>"
-        "<h2 style='font-size:16pt;'>5. Endpoint Ozetleri</h2><ul>%24</ul>"
-        "<h2 style='font-size:16pt;'>6. Parametre ve Form Girdileri</h2><ul>%25</ul>"
-        "<h2 style='font-size:16pt;'>7. Asset, Render ve Automation Bulgulari</h2><ul>%26</ul>"
-        "<h2 style='font-size:16pt;'>8. Coverage Timeline</h2><ul>%27</ul>"
-        "<h2 style='font-size:16pt;'>9. Benchmark Gecmisi ve Karsilastirma</h2><ul>%28</ul>"
-        "</body></html>")
-        .arg(m_module->targetUrl().toHtmlEscaped(),
-             QDateTime::currentDateTime().toString("dd.MM.yyyy HH:mm"),
-             m_module->scopePreset().toHtmlEscaped(),
-             QString::number(m_module->coverageScore()),
-             m_module->coverageSummary().toHtmlEscaped(),
-             m_module->automationSafetyStatus().toHtmlEscaped(),
-             m_module->benchmarkSummary().toHtmlEscaped(),
-             m_module->benchmarkDiffSummary().toHtmlEscaped(),
-             m_module->regressionSummary().toHtmlEscaped(),
-             operationalSummary.toHtmlEscaped(),
-             featureHtml,
-             QString::number(breakdown.value("auth").toInt()),
-             QString::number(breakdown.value("form").toInt()),
-             QString::number(breakdown.value("js").toInt()),
-             QString::number(breakdown.value("secret").toInt()),
-             QString::number(breakdown.value("admin").toInt()),
-             QString::number(breakdown.value("upload").toInt()),
-             QString::number(breakdown.value("delta").toInt()),
-             QString::number(breakdown.value("protected").toInt()),
-             QString::number(breakdown.value("missing").toInt()),
-             QString::number(breakdown.value("render").toInt()),
-             QString::number(breakdown.value("automation").toInt()),
-             highValueHtml,
-             endpointHtml,
-             parameterHtml,
-             assetHtml,
-             timelineHtml,
-             historyHtml,
-             workflowSummary.toHtmlEscaped());
+    const SpiderHostInsightsSummary hostInsights = buildSpiderHostInsights(m_module->endpoints(), m_module->assets());
+    if (hostInsights.rows.isEmpty()) {
+        appendEvent(tr("Host tanilari icin once veri uretilmeli."));
+        return;
+    }
+
+    const QString selectedHost = m_hostFilterCombo ? m_hostFilterCombo->currentData().toString() : QStringLiteral("all");
+    const QString suffix = selectedHost == QLatin1String("all") ? QStringLiteral("all-hosts") : sanitizedFileStem(selectedHost);
+    const QString defaultPath = ::spiderReportDefaultPath(m_module->targetUrl(), QStringLiteral("host-%1.json").arg(suffix));
+    const QString path = QFileDialog::getSaveFileName(this,
+                                                      tr("Host tanilarini disa aktar"),
+                                                      defaultPath,
+                                                      tr("JSON Dosyalari (*.json)"));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    QJsonArray rows;
+    for (const SpiderHostInsightRow &row : hostInsights.rows) {
+        if (selectedHost != QLatin1String("all") && row.host != selectedHost) {
+            continue;
+        }
+
+        QJsonObject item;
+        item.insert(QStringLiteral("host"), row.host);
+        item.insert(QStringLiteral("endpoints"), row.endpoints);
+        item.insert(QStringLiteral("workflow_hits"), row.workflowHits);
+        item.insert(QStringLiteral("workflow_result_hits"), row.workflowResultHits);
+        item.insert(QStringLiteral("waf_hits"), row.wafHits);
+        item.insert(QStringLiteral("suppressed_hits"), row.suppressedHits);
+        item.insert(QStringLiteral("scope_outliers"), row.scopeOutliers);
+        item.insert(QStringLiteral("pressure_score"), row.pressureScore);
+        item.insert(QStringLiteral("pressure_state"), row.pressureState);
+        item.insert(QStringLiteral("pressure_reason"), row.pressureReason);
+        item.insert(QStringLiteral("retry_after_count"), row.retryAfterCount);
+        item.insert(QStringLiteral("retry_scheduled_count"), row.retryScheduledCount);
+        item.insert(QStringLiteral("retry_delay"), row.retryDelay);
+        item.insert(QStringLiteral("vendor_hint"), row.vendorHint);
+
+        QJsonArray timeline;
+        for (const QString &entry : row.timelineEntries) {
+            timeline.append(entry);
+        }
+        item.insert(QStringLiteral("timeline"), timeline);
+        rows.append(item);
+    }
+
+    QJsonObject root;
+    root.insert(QStringLiteral("target"), m_module->targetUrl());
+    root.insert(QStringLiteral("selected_host"), selectedHost);
+    root.insert(QStringLiteral("exported_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    root.insert(QStringLiteral("stable_hosts"), hostInsights.stableHosts);
+    root.insert(QStringLiteral("guarded_hosts"), hostInsights.guardedHosts);
+    root.insert(QStringLiteral("waf_hosts"), hostInsights.wafHosts);
+    root.insert(QStringLiteral("stressed_hosts"), hostInsights.stressedHosts);
+    root.insert(QStringLiteral("hosts"), rows);
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        appendEvent(tr("Host tanilari yazilamadi: %1").arg(path));
+        return;
+    }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    if (!file.commit()) {
+        appendEvent(tr("Host tanilari kaydedilemedi: %1").arg(path));
+        return;
+    }
+
+    appendEvent(tr("Host tanilari disa aktarıldı: %1").arg(path));
 }
 
 void SpiderWidget::exportReport()
@@ -1687,15 +1417,19 @@ void SpiderWidget::exportReport()
     }
 
     delete m_reportPreviewDialog;
-    auto *dialog = new SpiderReportPreviewDialog(this);
+    auto *dialog = new ReportPreviewDialog(tr("Spider PDF Onizleme"),
+                                           tr("Bu pencere Spider kesif raporunun PDF onizlemesini gosterir. Kaydetme islemleri sadece burada yapilir."),
+                                           tr("PDF Kaydet"),
+                                           tr("HTML Kaydet"),
+                                           this);
     m_reportPreviewDialog = dialog;
     connect(dialog, &QDialog::finished, this, [this]() {
         m_reportPreviewDialog = nullptr;
     });
     dialog->view()->setHtml(m_lastReportHtml);
     const QString target = m_module ? m_module->targetUrl() : QString();
-    const QString pdfDefaultPath = spiderReportDefaultPath(target, QStringLiteral("pdf"));
-    const QString htmlDefaultPath = spiderReportDefaultPath(target, QStringLiteral("html"));
+    const QString pdfDefaultPath = ::spiderReportDefaultPath(target, QStringLiteral("pdf"));
+    const QString htmlDefaultPath = ::spiderReportDefaultPath(target, QStringLiteral("html"));
 
     connect(dialog->savePdfButton(), &QPushButton::clicked, dialog, [this, dialog, pdfDefaultPath]() {
         const QString path = QFileDialog::getSaveFileName(dialog,
@@ -1707,7 +1441,7 @@ void SpiderWidget::exportReport()
         }
 
         QString errorMessage;
-        if (!saveSpiderPdfReport(path, m_lastReportHtml, &errorMessage)) {
+        if (!::saveSpiderPdfReport(path, m_lastReportHtml, &errorMessage)) {
             appendEvent(tr("Spider PDF raporu kaydedilemedi: %1").arg(errorMessage));
             return;
         }

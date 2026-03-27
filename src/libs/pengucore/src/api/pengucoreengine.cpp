@@ -170,6 +170,7 @@ bool PenguCoreEngine::startLiveCapture(const QString &adapterName)
     m_lastLiveMetricSampleUtc = QDateTime::currentDateTimeUtc();
     m_liveCaptureStartedUtc = m_lastLiveMetricSampleUtc;
     m_liveCaptureStoppedUtc = {};
+    m_liveStopRequested = false;
     if (!m_liveCapture->startCapture(adapterName, m_liveCaptureFilter)) {
         if (m_liveCaptureWriter) {
             m_liveCaptureWriter->close();
@@ -185,12 +186,10 @@ bool PenguCoreEngine::startLiveCapture(const QString &adapterName)
 
 void PenguCoreEngine::stopLiveCapture()
 {
-    if (m_liveCapture) {
-        m_liveCapture->stopCapture();
-    }
+    stressSafeShutdownLiveCapture();
     m_liveCaptureStoppedUtc = QDateTime::currentDateTimeUtc();
     flushPendingLiveFrames();
-    rebuildFlows();
+    updateFlowState();
     if (m_liveCaptureWriter) {
         m_liveCaptureWriter->close();
     }
@@ -286,9 +285,7 @@ bool PenguCoreEngine::openCaptureFile(const QString &filePath)
 
 void PenguCoreEngine::clearSession()
 {
-    if (m_liveCapture && m_liveCapture->isRunning()) {
-        m_liveCapture->stopCapture();
-    }
+    stressSafeShutdownLiveCapture();
     if (m_liveFlushTimer) {
         m_liveFlushTimer->stop();
     }
@@ -311,9 +308,7 @@ void PenguCoreEngine::clearSession()
     if (m_liveCaptureWriter) {
         m_liveCaptureWriter->close();
     }
-    emit sessionReset();
-    m_statusText = QStringLiteral("PenguCore oturumu temizlendi.");
-    emit statusChanged(m_statusText);
+    emitSessionState(QStringLiteral("PenguCore oturumu temizlendi."), true);
 }
 
 bool PenguCoreEngine::loadCaptureSession(const QString &filePath)
@@ -334,29 +329,53 @@ bool PenguCoreEngine::loadCaptureSession(const QString &filePath)
 
     m_lastOpenedFormat = result.pcapngDetected ? QStringLiteral("pcapng") : QStringLiteral("pcap");
 
-    m_packets.reserve(result.frames.size());
-    for (const RawFrame &frame : result.frames) {
-        m_packets.push_back(makeRecordFromRawFrame(frame));
-    }
-
-    rebuildFlows();
-
-    m_statusText = QStringLiteral("PenguCore %1 frame ve %2 flow yukledi.")
-                       .arg(m_packets.size())
-                       .arg(m_flows.size());
-    emit sessionUpdated();
-    emit statusChanged(m_statusText);
+    const QVector<RawFrame> ingested = ingestFrames(result.frames);
+    m_packets = parseFrames(ingested);
+    classifyPackets(m_packets);
+    updateFlowState();
+    emitSessionState(QStringLiteral("PenguCore %1 frame ve %2 flow yukledi.")
+                         .arg(m_packets.size())
+                         .arg(m_flows.size()));
     return true;
 }
 
-PacketRecord PenguCoreEngine::makeRecordFromRawFrame(const RawFrame &frame) const
+QVector<RawFrame> PenguCoreEngine::ingestFrames(const QVector<RawFrame> &frames) const
+{
+    return frames;
+}
+
+QVector<PacketRecord> PenguCoreEngine::parseFrames(const QVector<RawFrame> &frames) const
 {
     BasicFrameParser parser;
-    return parser.parse(frame);
+    QVector<PacketRecord> records;
+    records.reserve(frames.size());
+    for (const RawFrame &frame : frames) {
+        records.push_back(parser.parse(frame));
+    }
+    return records;
+}
+
+void PenguCoreEngine::classifyPackets(QVector<PacketRecord> &packets) const
+{
+    for (PacketRecord &packet : packets) {
+        if (packet.summary.trimmed().isEmpty()) {
+            packet.summary = QStringLiteral("Unknown frame");
+        }
+        if (packet.sourceEndpoint.trimmed().isEmpty()) {
+            packet.sourceEndpoint = QStringLiteral("unknown");
+        }
+        if (packet.destinationEndpoint.trimmed().isEmpty()) {
+            packet.destinationEndpoint = QStringLiteral("unknown");
+        }
+    }
 }
 
 void PenguCoreEngine::appendLiveFrame(const RawFrame &frame)
 {
+    if (m_liveStopRequested) {
+        ++m_liveDroppedFrameCount;
+        return;
+    }
     ++m_liveCapturedFrameCount;
     if (m_liveCaptureWriter && m_liveCaptureWriter->isOpen()) {
         QString writeError;
@@ -395,8 +414,13 @@ void PenguCoreEngine::flushPendingLiveFrames()
 
     const int batchFrameCount = m_pendingLiveFrames.size();
     qint64 batchBytes = 0;
-    for (const RawFrame &frame : std::as_const(m_pendingLiveFrames)) {
-        m_packets.push_back(makeRecordFromRawFrame(frame));
+    const QVector<RawFrame> batch = ingestFrames(m_pendingLiveFrames);
+    QVector<PacketRecord> parsed = parseFrames(batch);
+    classifyPackets(parsed);
+    for (const PacketRecord &record : std::as_const(parsed)) {
+        m_packets.push_back(record);
+    }
+    for (const RawFrame &frame : std::as_const(batch)) {
         batchBytes += frame.capturedLength;
     }
     m_liveAnalyzedFrameCount += batchFrameCount;
@@ -419,24 +443,49 @@ void PenguCoreEngine::flushPendingLiveFrames()
     }
 
     if (m_liveFlushCount % kLiveFlowRebuildEveryNFlushes == 0 || m_flows.isEmpty()) {
-        rebuildFlows();
+        updateFlowState();
     }
 
-    m_statusText = QStringLiteral("Canli oturum: pencere %1, analiz %2, flow %3, drop %4, trim %5, health %6")
-                       .arg(m_packets.size())
-                       .arg(m_liveAnalyzedFrameCount)
-                       .arg(m_flows.size())
-                       .arg(m_liveDroppedFrameCount)
-                       .arg(m_liveTrimmedFrameCount)
-                       .arg(liveHealthStatus());
-    emit sessionUpdated();
-    emit statusChanged(m_statusText);
+    emitSessionState(QStringLiteral("Canli oturum: pencere %1, analiz %2, flow %3, drop %4, trim %5, health %6")
+                         .arg(m_packets.size())
+                         .arg(m_liveAnalyzedFrameCount)
+                         .arg(m_flows.size())
+                         .arg(m_liveDroppedFrameCount)
+                         .arg(m_liveTrimmedFrameCount)
+                         .arg(liveHealthStatus()));
 }
 
 void PenguCoreEngine::rebuildFlows()
 {
     FlowTracker tracker;
     m_flows = tracker.build(m_packets);
+}
+
+void PenguCoreEngine::updateFlowState()
+{
+    rebuildFlows();
+}
+
+void PenguCoreEngine::emitSessionState(const QString &message, bool reset)
+{
+    if (reset) {
+        emit sessionReset();
+    } else {
+        emit sessionUpdated();
+    }
+    m_statusText = message;
+    emit statusChanged(m_statusText);
+}
+
+void PenguCoreEngine::stressSafeShutdownLiveCapture()
+{
+    m_liveStopRequested = true;
+    if (m_liveFlushTimer) {
+        m_liveFlushTimer->stop();
+    }
+    if (m_liveCapture && m_liveCapture->isRunning()) {
+        m_liveCapture->stopCapture();
+    }
 }
 
 } // namespace pengufoce::pengucore

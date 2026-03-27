@@ -3,8 +3,16 @@
 #include "core/settings/settingsmanager.h"
 #include "modules/recon/reconmodule.h"
 #include "modules/recon/engine/pengufoce_masterscanner.h"
+#include "modules/recon/engine/reconreportbuilder.h"
 #include "ui/layout/flowlayout.h"
 #include "ui/layout/workspacecontainers.h"
+#include "ui/views/recon/reconcontrolpanel.h"
+#include "ui/views/recon/reconevidencepanel.h"
+#include "ui/views/recon/reconfindingspanel.h"
+#include "ui/views/recon/reconlivepanel.h"
+#include "ui/views/recon/reconreportpanel.h"
+#include "ui/views/recon/reconsummarypanel.h"
+#include "ui/widgets/reportpreviewdialog.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -33,6 +41,7 @@
 #include <QPlainTextEdit>
 #include <QPdfWriter>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSet>
 #include <QTextDocument>
 #include <QTextEdit>
@@ -409,55 +418,6 @@ private:
     bool m_active = false;
     qreal m_phase = 0.0;
     qreal m_sweep = 0.0;
-};
-
-class ReportPreviewDialog : public QDialog
-{
-public:
-    explicit ReportPreviewDialog(QWidget *parent = nullptr)
-        : QDialog(parent)
-    {
-        setWindowTitle(QObject::tr("PDF Onizleme"));
-        resize(980, 780);
-
-        auto *layout = new QVBoxLayout(this);
-        layout->setContentsMargins(16, 16, 16, 16);
-        layout->setSpacing(12);
-
-        auto *title = new QLabel(QObject::tr("Rapor Onizlemesi"), this);
-        title->setObjectName("sectionTitle");
-        auto *info = new QLabel(QObject::tr("Bu pencere PDF ciktisinin onizlemesini gosterir. Kaydetme islemleri sadece burada yapilir."), this);
-        info->setObjectName("mutedText");
-        info->setWordWrap(true);
-        layout->addWidget(title);
-        layout->addWidget(info);
-
-        m_view = new QTextEdit(this);
-        m_view->setReadOnly(true);
-        m_view->setStyleSheet("QTextEdit { background: #ffffff; color: #171a20; border: 1px solid #c7cdd8; border-radius: 10px; padding: 20px; }");
-        layout->addWidget(m_view, 1);
-
-        auto *buttons = new QHBoxLayout();
-        m_savePdfButton = new QPushButton(QObject::tr("PDF Kaydet"), this);
-        m_saveHtmlButton = new QPushButton(QObject::tr("HTML Kaydet"), this);
-        auto *closeButton = new QPushButton(QObject::tr("Kapat"), this);
-        buttons->addStretch();
-        buttons->addWidget(m_savePdfButton);
-        buttons->addWidget(m_saveHtmlButton);
-        buttons->addWidget(closeButton);
-        layout->addLayout(buttons);
-
-        connect(closeButton, &QPushButton::clicked, this, &QDialog::accept);
-    }
-
-    QTextEdit *view() const { return m_view; }
-    QPushButton *savePdfButton() const { return m_savePdfButton; }
-    QPushButton *saveHtmlButton() const { return m_saveHtmlButton; }
-
-private:
-    QTextEdit *m_view = nullptr;
-    QPushButton *m_savePdfButton = nullptr;
-    QPushButton *m_saveHtmlButton = nullptr;
 };
 
 } // namespace
@@ -987,53 +947,7 @@ QString ReconWidget::phaseLabelForMessage(const QString &message) const
 
 QString ReconWidget::buildDiffSummary(const QVariantMap &currentReport, const QVariantMap &baselineReport) const
 {
-    if (currentReport.isEmpty() || baselineReport.isEmpty()) {
-        return tr("Karsilastirma verisi hazir degil.");
-    }
-
-    const QVariantList currentPorts = currentReport.value("openPorts").toList();
-    const QVariantList baselinePorts = baselineReport.value("openPorts").toList();
-    const QVariantList currentSubs = currentReport.value("subdomains").toList();
-    const QVariantList baselineSubs = baselineReport.value("subdomains").toList();
-    const QVariantList currentFindings = currentReport.value("findings").toList();
-    const QVariantList baselineFindings = baselineReport.value("findings").toList();
-
-    QSet<QString> currentPortSet;
-    for (const QVariant &value : currentPorts) {
-        const QVariantMap row = value.toMap();
-        currentPortSet.insert(QString("%1/%2").arg(row.value("port").toString(), row.value("service").toString()));
-    }
-    QSet<QString> baselinePortSet;
-    for (const QVariant &value : baselinePorts) {
-        const QVariantMap row = value.toMap();
-        baselinePortSet.insert(QString("%1/%2").arg(row.value("port").toString(), row.value("service").toString()));
-    }
-    QSet<QString> currentSubSet;
-    for (const QVariant &value : currentSubs) currentSubSet.insert(value.toString());
-    QSet<QString> baselineSubSet;
-    for (const QVariant &value : baselineSubs) baselineSubSet.insert(value.toString());
-    QSet<QString> currentFindingSet;
-    for (const QVariant &value : currentFindings) {
-        const QVariantMap row = value.toMap();
-        currentFindingSet.insert(QString("%1|%2").arg(row.value("severity").toString(), row.value("title").toString()));
-    }
-    QSet<QString> baselineFindingSet;
-    for (const QVariant &value : baselineFindings) {
-        const QVariantMap row = value.toMap();
-        baselineFindingSet.insert(QString("%1|%2").arg(row.value("severity").toString(), row.value("title").toString()));
-    }
-
-    const QStringList newPorts = QStringList((currentPortSet - baselinePortSet).values());
-    const QStringList lostPorts = QStringList((baselinePortSet - currentPortSet).values());
-    const QStringList newSubs = QStringList((currentSubSet - baselineSubSet).values());
-    const QStringList newFindings = QStringList((currentFindingSet - baselineFindingSet).values());
-
-    return tr("Baz hedef: %1\nYeni portlar: %2\nKaybolan portlar: %3\nYeni subdomainler: %4\nYeni bulgular: %5")
-        .arg(baselineReport.value("sanitizedTarget").toString(),
-             newPorts.isEmpty() ? tr("-") : newPorts.join(", "),
-             lostPorts.isEmpty() ? tr("-") : lostPorts.join(", "),
-             newSubs.isEmpty() ? tr("-") : newSubs.join(", "),
-             newFindings.isEmpty() ? tr("-") : newFindings.join(" | "));
+    return buildReconDiffSummary(currentReport, baselineReport);
 }
 
 void ReconWidget::refreshRelationshipView(const QVariantMap &reportVariant)
@@ -1166,7 +1080,18 @@ void ReconWidget::refreshEvidenceFilters()
 
 void ReconWidget::buildUi()
 {
-    auto *root = pengufoce::ui::layout::createPageRoot(this, 18);
+    auto *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    auto *page = new QWidget(scrollArea);
+    auto *root = pengufoce::ui::layout::createPageRoot(page, 18);
 
     auto *hero = pengufoce::ui::layout::createHeroCard(this);
     auto *heroLayout = qobject_cast<QVBoxLayout *>(hero->layout());
@@ -1185,201 +1110,42 @@ void ReconWidget::buildUi()
     heroTopBar->addStretch();
     heroTopBar->addWidget(m_previewReportButton, 0, Qt::AlignTop);
 
-    auto *summaryHost = new QWidget(hero);
-    auto *summary = new FlowLayout(summaryHost, 0, 12, 12);
-    auto *statusCard = makeInfoBlock(hero, tr("Durum"), &m_statusValue);
-    QLabel *targetValue = nullptr;
-    auto *targetCard = makeInfoBlock(hero, tr("Hedef"), &targetValue);
-    auto *scoreCard = makeInfoBlock(hero, tr("Guvenlik Puani"), &m_scoreValue);
-    auto *findingsCountCard = makeInfoBlock(hero, tr("Bulgu"), &m_findingsCountValue);
-    auto *portsCountCard = makeInfoBlock(hero, tr("Acik Port"), &m_portsCountValue);
-    auto *subdomainCountCard = makeInfoBlock(hero, tr("Subdomain"), &m_subdomainCountValue);
-    auto *artifactCountCard = makeInfoBlock(hero, tr("URL + JS"), &m_archiveCountValue);
-    statusCard->setMinimumWidth(150);
-    targetCard->setMinimumWidth(150);
-    scoreCard->setMinimumWidth(150);
-    findingsCountCard->setMinimumWidth(130);
-    portsCountCard->setMinimumWidth(130);
-    subdomainCountCard->setMinimumWidth(130);
-    artifactCountCard->setMinimumWidth(130);
-    targetValue->setText(tr("Canli"));
-    m_scoreValue->setText("--");
-    m_findingsCountValue->setText("0");
-    m_portsCountValue->setText("0");
-    m_subdomainCountValue->setText("0");
-    m_archiveCountValue->setText("0");
-    summary->addWidget(statusCard);
-    summary->addWidget(targetCard);
-    summary->addWidget(scoreCard);
-    summary->addWidget(findingsCountCard);
-    summary->addWidget(portsCountCard);
-    summary->addWidget(subdomainCountCard);
-    summary->addWidget(artifactCountCard);
-    summaryHost->setLayout(summary);
-
-    auto *categoryHost = new QWidget(hero);
-    auto *categorySummary = new FlowLayout(categoryHost, 0, 12, 12);
-    auto *dnsCountCard = makeInfoBlock(hero, tr("DNS Kaydi"), &m_dnsCountValue);
-    auto *surfaceCountCard = makeInfoBlock(hero, tr("Yuzey"), &m_surfaceCountValue);
-    auto *osintCountCard = makeInfoBlock(hero, tr("OSINT"), &m_osintCountValue);
-    auto *spiderCountCard = makeInfoBlock(hero, tr("Spider"), &m_spiderCountValue);
-    dnsCountCard->setMinimumWidth(130);
-    surfaceCountCard->setMinimumWidth(130);
-    osintCountCard->setMinimumWidth(130);
-    spiderCountCard->setMinimumWidth(130);
-    m_dnsCountValue->setText("0");
-    m_surfaceCountValue->setText("0");
-    m_osintCountValue->setText("0");
-    m_spiderCountValue->setText("0");
-    categorySummary->addWidget(dnsCountCard);
-    categorySummary->addWidget(surfaceCountCard);
-    categorySummary->addWidget(osintCountCard);
-    categorySummary->addWidget(spiderCountCard);
-    categoryHost->setLayout(categorySummary);
+    auto *summaryPanel = new ReconSummaryPanel(hero);
+    m_statusValue = summaryPanel->statusValue();
+    m_scoreValue = summaryPanel->scoreValue();
+    m_findingsCountValue = summaryPanel->findingsCountValue();
+    m_portsCountValue = summaryPanel->portsCountValue();
+    m_subdomainCountValue = summaryPanel->subdomainCountValue();
+    m_archiveCountValue = summaryPanel->archiveCountValue();
+    m_dnsCountValue = summaryPanel->dnsCountValue();
+    m_surfaceCountValue = summaryPanel->surfaceCountValue();
+    m_osintCountValue = summaryPanel->osintCountValue();
+    m_spiderCountValue = summaryPanel->spiderCountValue();
 
     heroLayout->addLayout(heroTopBar);
     heroLayout->addWidget(subtitle);
-    heroLayout->addWidget(summaryHost);
-    heroLayout->addWidget(categoryHost);
+    heroLayout->addWidget(summaryPanel);
 
-    auto *feedCard = new QFrame(this);
-    feedCard->setObjectName("cardPanel");
-    auto *feedLayout = new QVBoxLayout(feedCard);
-    feedLayout->setContentsMargins(20, 20, 20, 20);
-    feedLayout->setSpacing(12);
-    auto *feedHeader = new QHBoxLayout();
-    auto *feedTitle = new QLabel(tr("Canli Islem Konsolu"), feedCard);
-    feedTitle->setObjectName("sectionTitle");
-    auto *feedInfo = new QLabel(tr("Tarayicinin attigi her adim burada terminal akisi gibi gorunur. Her kayit zaman damgasi ve gecen sure ile yazilir."), feedCard);
-    feedInfo->setObjectName("mutedText");
-    feedInfo->setWordWrap(true);
+    auto *livePanel = new ReconLivePanel(this);
+    m_pulseWidget = livePanel->pulseWidget();
+    m_feedConsole = livePanel->feedConsole();
+    m_activityValue = livePanel->activityValue();
+    m_progressBar = livePanel->progressBar();
+    m_phaseSummaryValue = livePanel->phaseSummaryValue();
 
-    auto *pulse = new ReconPulseWidget(feedCard);
-    pulse->setMinimumSize(120, 120);
-    m_pulseWidget = pulse;
-
-    m_feedConsole = new QPlainTextEdit(feedCard);
-    m_feedConsole->setReadOnly(true);
-    m_feedConsole->setMinimumHeight(180);
-    m_feedConsole->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_feedConsole->setPlaceholderText(tr("[hazir] Tarama baslatildiginda canli adimlar burada gorunecek."));
-
-    feedHeader->addWidget(feedTitle);
-    feedHeader->addStretch();
-    feedHeader->addWidget(pulse);
-    feedLayout->addLayout(feedHeader);
-    feedLayout->addWidget(feedInfo);
-    feedLayout->addWidget(m_feedConsole);
-
-    auto *opsCard = new QFrame(this);
-    opsCard->setObjectName("cardPanel");
-    auto *opsLayout = new QHBoxLayout(opsCard);
-    opsLayout->setContentsMargins(20, 20, 20, 20);
-    opsLayout->setSpacing(18);
-
-    auto *opsTextLayout = new QVBoxLayout();
-    opsTextLayout->setSpacing(10);
-    auto *opsTitle = new QLabel(tr("Canli Tarama Durumu"), opsCard);
-    opsTitle->setObjectName("sectionTitle");
-    m_activityValue = new QLabel(tr("Hazir. Baslattiginda DNS, web guvenligi, port ve OSINT adimlari burada canli gorunur."), opsCard);
-    m_activityValue->setObjectName("mutedText");
-    m_activityValue->setWordWrap(true);
-    m_progressBar = new QProgressBar(opsCard);
-    m_progressBar->setRange(0, 100);
-    m_progressBar->setValue(0);
-    m_progressBar->setTextVisible(false);
-    m_phaseSummaryValue = new QLabel(tr("Hazir"), opsCard);
-    m_phaseSummaryValue->setObjectName("mutedText");
-    m_phaseSummaryValue->setWordWrap(true);
-    opsTextLayout->addWidget(opsTitle);
-    opsTextLayout->addWidget(m_activityValue);
-    opsTextLayout->addWidget(m_progressBar);
-    opsTextLayout->addWidget(m_phaseSummaryValue);
-    opsTextLayout->addStretch();
-    opsLayout->addLayout(opsTextLayout, 1);
-
-    auto *setupCard = new QFrame(this);
-    setupCard->setObjectName("cardPanel");
-    auto *setupOuterLayout = new QHBoxLayout(setupCard);
-    setupOuterLayout->setContentsMargins(20, 20, 20, 20);
-    setupOuterLayout->setSpacing(0);
-    auto *setupFormHost = new QWidget(setupCard);
-    setupFormHost->setMinimumWidth(760);
-    setupFormHost->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *setupLayout = new QGridLayout(setupFormHost);
-    setupLayout->setContentsMargins(0, 0, 0, 0);
-    setupLayout->setHorizontalSpacing(18);
-    setupLayout->setVerticalSpacing(12);
-    setupLayout->setColumnMinimumWidth(0, 120);
-    setupLayout->setColumnMinimumWidth(1, 190);
-    setupLayout->setColumnMinimumWidth(2, 120);
-    setupLayout->setColumnMinimumWidth(3, 190);
-    setupLayout->setColumnStretch(0, 1);
-    setupLayout->setColumnStretch(1, 3);
-    setupLayout->setColumnStretch(2, 1);
-    setupLayout->setColumnStretch(3, 3);
-
-    m_targetEdit = new QLineEdit(setupCard);
-    m_endpointEdit = new QLineEdit(setupCard);
-    m_targetPresetCombo = new QComboBox(setupCard);
-    m_recentTargetCombo = new QComboBox(setupCard);
-    m_scanProfileCombo = new QComboBox(setupCard);
-    m_recentSessionCombo = new QComboBox(setupCard);
-    m_companyEdit = new QLineEdit(setupCard);
-    m_clientEdit = new QLineEdit(setupCard);
-    m_testerEdit = new QLineEdit(setupCard);
-    m_classificationEdit = new QLineEdit(setupCard);
-    m_scopeEdit = new QLineEdit(setupCard);
-    m_endpointEdit->setPlaceholderText("https://ornek-osint-ucnokta/api/search");
-    const QList<QLineEdit *> edits = {m_targetEdit, m_endpointEdit, m_companyEdit, m_clientEdit, m_testerEdit, m_classificationEdit, m_scopeEdit};
-    for (QLineEdit *edit : edits) {
-        edit->setMinimumWidth(180);
-        edit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    }
-    m_targetPresetCombo->addItem(tr("Hazir hedefler"));
-    m_targetPresetCombo->addItem(QStringLiteral("scanme.nmap.org"));
-    m_targetPresetCombo->addItem(QStringLiteral("example.com"));
-    m_targetPresetCombo->addItem(QStringLiteral("testphp.vulnweb.com"));
-    m_targetPresetCombo->addItem(QStringLiteral("demo.testfire.net"));
-    m_targetPresetCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_recentTargetCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_scanProfileCombo->addItems({tr("Tam Kesif"), tr("Alan Adi Istihbarati"), tr("Web Yuzeyi"), tr("Hizli Bakis")});
-    m_scanProfileCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_recentSessionCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-
-    setupLayout->addWidget(createInfoLabel(tr("Hedef"), tr("Alan adi, IP veya tam URL girebilirsin. Sistem uygun formata cevirip tek tusla tarar.")), 0, 0);
-    setupLayout->addWidget(m_targetEdit, 0, 1);
-    setupLayout->addWidget(createInfoLabel(tr("OSINT API"), tr("Istege bagli tehdit istihbarati veya sizinti servisi ucnoktasi. Bos birakirsan sadece yerel kontroller calisir.")), 0, 2);
-    setupLayout->addWidget(m_endpointEdit, 0, 3);
-    setupLayout->addWidget(createInfoLabel(tr("Hazirlayan Kurum"), tr("PDF kapak ve yonetici ozeti icin kullanilir.")), 1, 0);
-    setupLayout->addWidget(m_companyEdit, 1, 1);
-    setupLayout->addWidget(createInfoLabel(tr("Musteri"), tr("Raporun teslim edilecegi kurum veya birim adi.")), 1, 2);
-    setupLayout->addWidget(m_clientEdit, 1, 3);
-    setupLayout->addWidget(createInfoLabel(tr("Test Uzmani"), tr("Raporu hazirlayan uzman veya ekip.")), 2, 0);
-    setupLayout->addWidget(m_testerEdit, 2, 1);
-    setupLayout->addWidget(createInfoLabel(tr("Siniflandirma"), tr("Ornek: Kurum Ici, Gizli, Kisitli Dagitim.")), 2, 2);
-    setupLayout->addWidget(m_classificationEdit, 2, 3);
-    setupLayout->addWidget(createInfoLabel(tr("Kapsam Ozeti"), tr("PDF raporunda metodoloji ve kapsam basligi altinda gosterilir.")), 3, 0);
-    setupLayout->addWidget(m_scopeEdit, 3, 1, 1, 3);
-    setupLayout->addWidget(createInfoLabel(tr("Hazir Hedef"), tr("Demo veya test ortamlari icin hizli hedef secimi.")), 4, 0);
-    setupLayout->addWidget(m_targetPresetCombo, 4, 1);
-    setupLayout->addWidget(createInfoLabel(tr("Tarama Profili"), tr("Hazir profil secimi kapsam ozetini hizla doldurur.")), 4, 2);
-    setupLayout->addWidget(m_scanProfileCombo, 4, 3);
-    setupLayout->addWidget(createInfoLabel(tr("Son Hedefler"), tr("En son kullandigin hedefleri tek tikla geri cagirir.")), 5, 0);
-    setupLayout->addWidget(m_recentTargetCombo, 5, 1, 1, 3);
-
-    auto *buttonsHost = new QWidget(setupCard);
-    auto *buttons = new FlowLayout(buttonsHost, 0, 10, 10);
-    m_startButton = new QPushButton(tr("Kesifi Baslat"), setupCard);
-    m_startButton->setObjectName("accentButton");
-    m_stopButton = new QPushButton(tr("Durdur"), setupCard);
-    buttons->addWidget(m_startButton);
-    buttons->addWidget(m_stopButton);
-    buttonsHost->setLayout(buttons);
-    setupLayout->addWidget(buttonsHost, 6, 0, 1, 4);
-    setupOuterLayout->addStretch();
-    setupOuterLayout->addWidget(setupFormHost);
-    setupOuterLayout->addStretch();
+    auto *setupCard = new ReconControlPanel(this);
+    m_targetEdit = setupCard->targetEdit();
+    m_endpointEdit = setupCard->endpointEdit();
+    m_companyEdit = setupCard->companyEdit();
+    m_clientEdit = setupCard->clientEdit();
+    m_testerEdit = setupCard->testerEdit();
+    m_classificationEdit = setupCard->classificationEdit();
+    m_scopeEdit = setupCard->scopeEdit();
+    m_targetPresetCombo = setupCard->targetPresetCombo();
+    m_recentTargetCombo = setupCard->recentTargetCombo();
+    m_scanProfileCombo = setupCard->scanProfileCombo();
+    m_startButton = setupCard->startButton();
+    m_stopButton = setupCard->stopButton();
 
     auto makeListCard = [this](const QString &titleText, QListWidget **listWidget) {
         auto *card = new QFrame(this);
@@ -1396,219 +1162,60 @@ void ReconWidget::buildUi()
         return card;
     };
 
-    auto *findingsCard = new QFrame(this);
-    findingsCard->setObjectName("cardPanel");
-    auto *findingsLayout = new QHBoxLayout(findingsCard);
-    findingsLayout->setContentsMargins(20, 20, 20, 20);
-    findingsLayout->setSpacing(16);
+    auto *findingsCard = new ReconFindingsPanel(this);
+    m_findingsSeverityFilter = findingsCard->severityFilter();
+    m_findingsSearchEdit = findingsCard->searchEdit();
+    m_addManualFindingButton = findingsCard->addManualFindingButton();
+    m_findingsList = findingsCard->findingsList();
+    m_copyDetailButton = findingsCard->copyDetailButton();
+    m_findingDetailView = findingsCard->findingDetailView();
+    m_findingNoteEdit = findingsCard->findingNoteEdit();
+    m_saveFindingNoteButton = findingsCard->saveFindingNoteButton();
 
-    auto *findingsColumn = new QVBoxLayout();
-    findingsColumn->setSpacing(12);
-    auto *findingsTitle = new QLabel(tr("Oncelikli Bulgular"), findingsCard);
-    findingsTitle->setObjectName("sectionTitle");
-    auto *findingsInfo = new QLabel(tr("Tum aciklar tek listede yuksek riskten dusuge siralanir. Bir bulguya tikladiginda neden var oldugunu, etkisini ve onerilen aksiyonu sag panelde gorursun."), findingsCard);
-    findingsInfo->setObjectName("mutedText");
-    findingsInfo->setWordWrap(true);
-    auto *findingsFilterHost = new QWidget(findingsCard);
-    auto *findingsFilterLayout = new FlowLayout(findingsFilterHost, 0, 10, 10);
-    m_findingsSeverityFilter = new QComboBox(findingsCard);
-    m_findingsSeverityFilter->addItems({tr("Tum seviyeler"), tr("Yuksek"), tr("Orta"), tr("Dusuk"), tr("Bilgi")});
-    m_findingsSearchEdit = new QLineEdit(findingsCard);
-    m_findingsSearchEdit->setPlaceholderText(tr("Bulgu ara"));
-    m_addManualFindingButton = new QPushButton(tr("Manuel Bulgu Ekle"), findingsCard);
-    findingsFilterLayout->addWidget(m_findingsSeverityFilter);
-    findingsFilterLayout->addWidget(m_findingsSearchEdit);
-    findingsFilterLayout->addWidget(m_addManualFindingButton);
-    findingsFilterHost->setLayout(findingsFilterLayout);
-    m_findingsList = new QListWidget(findingsCard);
-    m_findingsList->setMinimumWidth(300);
-    m_findingsList->setMinimumHeight(240);
-    findingsColumn->addWidget(findingsTitle);
-    findingsColumn->addWidget(findingsInfo);
-    findingsColumn->addWidget(findingsFilterHost);
-    findingsColumn->addWidget(m_findingsList, 1);
-
-    auto *detailColumn = new QVBoxLayout();
-    detailColumn->setSpacing(12);
-    auto *detailTitle = new QLabel(tr("Bulgu Detayi"), findingsCard);
-    detailTitle->setObjectName("sectionTitle");
-    m_copyDetailButton = new QPushButton(tr("Detayi Kopyala"), findingsCard);
-    auto *detailHeader = new QHBoxLayout();
-    detailHeader->addWidget(detailTitle);
-    detailHeader->addStretch();
-    detailHeader->addWidget(m_copyDetailButton);
-    m_findingDetailView = new QTextEdit(findingsCard);
-    m_findingDetailView->setReadOnly(true);
-    m_findingDetailView->setMinimumHeight(240);
-    m_findingDetailView->setHtml(tr("<h3>Bir bulgu sec</h3><p>Listeden bir risk secildiginde burada neden var oldugu, neye yol acabilecegi ve nasil kapatilacagi gorunur.</p>"));
-    auto *noteTitle = new QLabel(tr("Bulguya Bagli Analist Notu"), findingsCard);
-    noteTitle->setObjectName("sectionTitle");
-    m_findingNoteEdit = new QTextEdit(findingsCard);
-    m_findingNoteEdit->setPlaceholderText(tr("Secili bulgu icin manuel not, dogrulama veya aksiyon yaz."));
-    m_findingNoteEdit->setMaximumHeight(120);
-    m_saveFindingNoteButton = new QPushButton(tr("Bulgu Notunu Kaydet"), findingsCard);
-    detailColumn->addLayout(detailHeader);
-    detailColumn->addWidget(m_findingDetailView, 1);
-    detailColumn->addWidget(noteTitle);
-    detailColumn->addWidget(m_findingNoteEdit);
-    detailColumn->addWidget(m_saveFindingNoteButton, 0, Qt::AlignRight);
-
-    findingsLayout->addLayout(findingsColumn, 3);
-    findingsLayout->addLayout(detailColumn, 4);
-
-    auto *evidenceCard = pengufoce::ui::layout::createCard(this, QStringLiteral("cardPanel"), QMargins(20, 20, 20, 20), 12);
-    auto *evidenceLayout = qobject_cast<QVBoxLayout *>(evidenceCard->layout());
-    auto *evidenceTitle = new QLabel(tr("Teknik Kanitlar"), evidenceCard);
-    evidenceTitle->setObjectName("sectionTitle");
-    auto *evidenceInfo = new QLabel(tr("Kucuk kucuk ayri paneller yerine kanitlar burada sekmeli yapida toplanir."), evidenceCard);
-    evidenceInfo->setObjectName("mutedText");
-    evidenceInfo->setWordWrap(true);
-    auto *evidenceFilterHost = new QWidget(evidenceCard);
-    auto *evidenceFilterLayout = new FlowLayout(evidenceFilterHost, 0, 10, 10);
-    m_evidenceSearchEdit = new QLineEdit(evidenceCard);
-    m_evidenceSearchEdit->setPlaceholderText(tr("Tum kanitlarda ara"));
-    evidenceFilterLayout->addWidget(m_evidenceSearchEdit);
-    evidenceFilterHost->setLayout(evidenceFilterLayout);
-    auto *evidenceTabs = new QTabWidget(evidenceCard);
-    evidenceTabs->setDocumentMode(true);
-    evidenceTabs->setUsesScrollButtons(true);
-    auto *dnsCard = makeListCard(tr("DNS Kayitlari"), &m_dnsList);
-    auto *surfaceCard = makeListCard(tr("Web, TLS ve Acik Servisler"), &m_surfaceList);
-    auto *osintCard = makeListCard(tr("OSINT ve Sizinti Kayitlari"), &m_osintList);
-    auto *subdomainCard = makeListCard(tr("Alt Alan Adlari"), &m_subdomainList);
-    auto *archiveCard = makeListCard(tr("Wayback ve Gizli URL Kayitlari"), &m_archiveList);
-    auto *jsCard = makeListCard(tr("JavaScript ve Secret Izleri"), &m_jsFindingList);
-    auto *cveCard = makeListCard(tr("CVE ve Surum Eslestirmeleri"), &m_cveList);
-    auto *spiderEndpointCard = makeListCard(tr("Spider Endpoint ve Yuzey Buluntulari"), &m_spiderEndpointList);
-    auto *spiderParameterCard = makeListCard(tr("Spider Parametre ve Form Girdileri"), &m_spiderParameterList);
-    auto *spiderAssetCard = makeListCard(tr("Spider Asset ve Literal Bulgulari"), &m_spiderAssetList);
-    auto *spiderHighValueCard = makeListCard(tr("Spider Kritik Yuzey"), &m_spiderHighValueList);
-    auto *spiderTimelineCard = makeListCard(tr("Spider Coverage Timeline"), &m_spiderTimelineList);
-    auto *whoisCard = new QFrame(evidenceTabs);
-    whoisCard->setObjectName("cardPanel");
-    auto *whoisLayout = new QVBoxLayout(whoisCard);
-    whoisLayout->setContentsMargins(20, 20, 20, 20);
-    whoisLayout->setSpacing(12);
-    auto *whoisTitle = new QLabel(tr("Whois ve Kayit Otoritesi Ozeti"), whoisCard);
-    whoisTitle->setObjectName("sectionTitle");
-    m_whoisSummaryView = new QTextEdit(whoisCard);
-    m_whoisSummaryView->setReadOnly(true);
-    m_whoisSummaryView->setHtml(tr("<p>Whois bilgisi bekleniyor.</p>"));
-    whoisLayout->addWidget(whoisTitle);
-    whoisLayout->addWidget(m_whoisSummaryView, 1);
-    auto *relationshipCard = new QFrame(evidenceTabs);
-    relationshipCard->setObjectName("cardPanel");
-    auto *relationshipLayout = new QVBoxLayout(relationshipCard);
-    relationshipLayout->setContentsMargins(20, 20, 20, 20);
-    relationshipLayout->setSpacing(12);
-    auto *relationshipTitle = new QLabel(tr("Varlik Iliskileri"), relationshipCard);
-    relationshipTitle->setObjectName("sectionTitle");
-    m_relationshipView = new QTextEdit(relationshipCard);
-    m_relationshipView->setReadOnly(true);
-    m_relationshipView->setHtml(tr("<p>Iliski ozeti henuz olusmadi.</p>"));
-    relationshipLayout->addWidget(relationshipTitle);
-    relationshipLayout->addWidget(m_relationshipView, 1);
-    auto *analysisTimelineCard = new QFrame(evidenceTabs);
-    analysisTimelineCard->setObjectName("cardPanel");
-    auto *analysisTimelineLayout = new QVBoxLayout(analysisTimelineCard);
-    analysisTimelineLayout->setContentsMargins(20, 20, 20, 20);
-    analysisTimelineLayout->setSpacing(12);
-    auto *analysisTimelineTitle = new QLabel(tr("Analiz Timeline"), analysisTimelineCard);
-    analysisTimelineTitle->setObjectName("sectionTitle");
-    m_timelineFilterCombo = new QComboBox(analysisTimelineCard);
+    auto *evidenceCard = new ReconEvidencePanel(this);
+    m_evidenceSearchEdit = evidenceCard->evidenceSearchEdit();
+    m_dnsList = evidenceCard->dnsList();
+    m_surfaceList = evidenceCard->surfaceList();
+    m_osintList = evidenceCard->osintList();
+    m_subdomainList = evidenceCard->subdomainList();
+    m_archiveList = evidenceCard->archiveList();
+    m_jsFindingList = evidenceCard->jsFindingList();
+    m_cveList = evidenceCard->cveList();
+    m_whoisSummaryView = evidenceCard->whoisSummaryView();
+    m_relationshipView = evidenceCard->relationshipView();
+    m_analysisTimelineList = evidenceCard->analysisTimelineList();
+    m_spiderEndpointList = evidenceCard->spiderEndpointList();
+    m_spiderParameterList = evidenceCard->spiderParameterList();
+    m_spiderAssetList = evidenceCard->spiderAssetList();
+    m_spiderHighValueList = evidenceCard->spiderHighValueList();
+    m_spiderTimelineList = evidenceCard->spiderTimelineList();
+    m_spiderCoverageLabel = evidenceCard->spiderCoverageLabel();
+    m_timelineFilterCombo = new QComboBox(evidenceCard);
     m_timelineFilterCombo->addItems({tr("Tum Timeline"), tr("DNS"), tr("Port"), tr("Web/TLS"), tr("OSINT"), tr("Wayback"), tr("Whois"), tr("Subdomain"), tr("Fuzz"), tr("JS"), tr("Final")});
-    m_analysisTimelineList = new QListWidget(analysisTimelineCard);
-    analysisTimelineLayout->addWidget(analysisTimelineTitle);
-    analysisTimelineLayout->addWidget(m_timelineFilterCombo);
-    analysisTimelineLayout->addWidget(m_analysisTimelineList, 1);
-    auto *spiderHighValueLayout = qobject_cast<QVBoxLayout *>(spiderHighValueCard->layout());
-    m_spiderCoverageLabel = new QLabel(tr("Spider coverage bilgisi bekleniyor."), spiderHighValueCard);
-    m_spiderCoverageLabel->setObjectName("mutedText");
-    m_spiderCoverageLabel->setWordWrap(true);
-    spiderHighValueLayout->insertWidget(2, m_spiderCoverageLabel);
-    evidenceTabs->addTab(dnsCard, tr("DNS"));
-    evidenceTabs->addTab(surfaceCard, tr("Yuzey"));
-    evidenceTabs->addTab(osintCard, tr("OSINT"));
-    evidenceTabs->addTab(subdomainCard, tr("Subdomain"));
-    evidenceTabs->addTab(archiveCard, tr("Wayback"));
-    evidenceTabs->addTab(jsCard, tr("JS"));
-    evidenceTabs->addTab(cveCard, tr("CVE"));
-    evidenceTabs->addTab(whoisCard, tr("Whois"));
-    evidenceTabs->addTab(relationshipCard, tr("Iliski"));
-    evidenceTabs->addTab(analysisTimelineCard, tr("Timeline"));
-    evidenceTabs->addTab(spiderEndpointCard, tr("Spider Yuzey"));
-    evidenceTabs->addTab(spiderParameterCard, tr("Spider Girdi"));
-    evidenceTabs->addTab(spiderAssetCard, tr("Spider Asset"));
-    evidenceTabs->addTab(spiderHighValueCard, tr("Spider Kritik"));
-    evidenceTabs->addTab(spiderTimelineCard, tr("Spider Timeline"));
-    evidenceLayout->addWidget(evidenceTitle);
-    evidenceLayout->addWidget(evidenceInfo);
-    evidenceLayout->addWidget(evidenceFilterHost);
-    evidenceLayout->addWidget(evidenceTabs);
+    if (m_analysisTimelineList && m_analysisTimelineList->parentWidget()) {
+        if (auto *analysisLayout = qobject_cast<QVBoxLayout *>(m_analysisTimelineList->parentWidget()->layout())) {
+            analysisLayout->insertWidget(1, m_timelineFilterCombo);
+        }
+    }
 
-    auto *reportCard = pengufoce::ui::layout::createCard(this, QStringLiteral("cardPanel"), QMargins(20, 20, 20, 20), 12);
-    auto *reportLayout = qobject_cast<QVBoxLayout *>(reportCard->layout());
-    auto *reportTitle = new QLabel(tr("Resmi Pentest Raporu"), reportCard);
-    reportTitle->setObjectName("sectionTitle");
-    auto *reportInfo = new QLabel(tr("PDF onizleme hizli erisim icin ust sagdadir. Buradaki alanlar rapor kapagi ve yonetici ozeti icin kullanilir."), reportCard);
-    reportInfo->setObjectName("mutedText");
-    reportInfo->setWordWrap(true);
-    auto *reportActionsHost = new QWidget(reportCard);
-    auto *reportActions = new FlowLayout(reportActionsHost, 0, 10, 10);
-    m_exportJsonButton = new QPushButton(tr("JSON Disa Aktar"), reportCard);
-    m_exportCsvButton = new QPushButton(tr("CSV Disa Aktar"), reportCard);
-    m_saveSessionButton = new QPushButton(tr("Oturumu Kaydet"), reportCard);
-    m_openSessionButton = new QPushButton(tr("Oturum Ac"), reportCard);
-    m_exportJsonButton->setEnabled(false);
-    m_exportCsvButton->setEnabled(false);
-    m_saveSessionButton->setEnabled(false);
-    auto *sessionArchiveHost = new QWidget(reportCard);
-    auto *sessionArchiveLayout = new FlowLayout(sessionArchiveHost, 0, 10, 10);
-    m_recentSessionCombo = m_recentSessionCombo ? m_recentSessionCombo : new QComboBox(reportCard);
-    sessionArchiveLayout->addWidget(m_recentSessionCombo);
-    sessionArchiveHost->setLayout(sessionArchiveLayout);
-    reportActions->addWidget(m_exportJsonButton);
-    reportActions->addWidget(m_exportCsvButton);
-    reportActions->addWidget(m_saveSessionButton);
-    reportActions->addWidget(m_openSessionButton);
-    reportActionsHost->setLayout(reportActions);
-    auto *diffCard = new QFrame(reportCard);
-    diffCard->setObjectName("cardPanel");
-    auto *diffLayout = new QVBoxLayout(diffCard);
-    diffLayout->setContentsMargins(16, 16, 16, 16);
-    diffLayout->setSpacing(8);
-    auto *diffTitle = new QLabel(tr("Oturum Karsilastirma"), diffCard);
-    diffTitle->setObjectName("sectionTitle");
-    m_diffSummaryValue = new QLabel(tr("Karsilastirma icin once bir oturum yukle veya yeni bir baseline olustur."), diffCard);
-    m_diffSummaryValue->setObjectName("mutedText");
-    m_diffSummaryValue->setWordWrap(true);
-    diffLayout->addWidget(diffTitle);
-    diffLayout->addWidget(m_diffSummaryValue);
-    auto *notesCard = new QFrame(reportCard);
-    notesCard->setObjectName("cardPanel");
-    auto *notesLayout = new QVBoxLayout(notesCard);
-    notesLayout->setContentsMargins(16, 16, 16, 16);
-    notesLayout->setSpacing(8);
-    auto *notesTitle = new QLabel(tr("Analist Notlari"), notesCard);
-    notesTitle->setObjectName("sectionTitle");
-    m_analystNotesEdit = new QTextEdit(notesCard);
-    m_analystNotesEdit->setPlaceholderText(tr("Buraya manuel gozlem, dogrulama notu veya sonraki aksiyonlarini yazabilirsin."));
-    notesLayout->addWidget(notesTitle);
-    notesLayout->addWidget(m_analystNotesEdit, 1);
-    reportLayout->addWidget(reportTitle);
-    reportLayout->addWidget(reportInfo);
-    reportLayout->addWidget(reportActionsHost);
-    reportLayout->addWidget(sessionArchiveHost);
-    reportLayout->addWidget(diffCard);
-    reportLayout->addWidget(notesCard);
+    auto *reportCard = new ReconReportPanel(this);
+    m_exportJsonButton = reportCard->exportJsonButton();
+    m_exportCsvButton = reportCard->exportCsvButton();
+    m_saveSessionButton = reportCard->saveSessionButton();
+    m_openSessionButton = reportCard->openSessionButton();
+    m_recentSessionCombo = reportCard->recentSessionCombo();
+    m_diffSummaryValue = reportCard->diffSummaryValue();
+    m_analystNotesEdit = reportCard->analystNotesEdit();
 
     root->addWidget(hero);
     root->addWidget(setupCard);
-    root->addWidget(feedCard);
-    root->addWidget(opsCard);
+    root->addWidget(livePanel);
     root->addWidget(findingsCard);
     root->addWidget(evidenceCard);
     root->addWidget(reportCard);
+    page->setLayout(root);
+    scrollArea->setWidget(page);
+    outerLayout->addWidget(scrollArea);
 
     connect(m_startButton, &QPushButton::clicked, this, &ReconWidget::startRecon);
     connect(m_stopButton, &QPushButton::clicked, this, &ReconWidget::stopRecon);
@@ -2396,377 +2003,40 @@ void ReconWidget::updateFindingDetail()
 
 QString ReconWidget::detailHtmlForFinding(const QString &severity, const QString &title, const QString &description) const
 {
-    const QString normalized = severity.trimmed().toLower();
-    const QVariantMap guidance = developerGuidanceForFinding(title, description);
-
-    const QString severityColor = normalized.contains("yuksek") ? "#d14343"
-                                : normalized.contains("orta") ? "#d08b2e"
-                                : normalized.contains("dusuk") ? "#5c7cfa"
-                                : "#7b8794";
-
-    return QString(
-               "<html><body style='font-family:Bahnschrift;padding:10px;font-size:11pt;'>"
-               "<h2 style='margin:0 0 8px 0;'>%1</h2>"
-               "<p><b>Risk Seviyesi:</b> <span style='color:%2;font-weight:700;'>%3</span></p>"
-               "<p><b>Olasi Risk Adlari:</b> %4</p>"
-               "<h3>Neden Var?</h3><p>%5</p>"
-               "<h3>Muhtemel Etki</h3><p>%6</p>"
-               "<h3>Bu Acik Uzerinden Neler Yapilabilir?</h3><p>%7</p>"
-               "<h3>Yazilim Ekibi Icin Cozum Rehberi</h3><p>%8</p>"
-               "<h3>Onerilen Aksiyon</h3><p>%9</p>"
-               "<h3>Analist Notu</h3><p>%10</p>"
-               "</body></html>")
-        .arg(title.toHtmlEscaped(),
-             severityColor,
-             severity.toUpper().toHtmlEscaped(),
-             guidance.value("riskNames").toString().toHtmlEscaped(),
-             description.toHtmlEscaped(),
-             guidance.value("impact").toString().toHtmlEscaped(),
-             guidance.value("attackerPlay").toString().toHtmlEscaped(),
-             guidance.value("developerNotes").toString().toHtmlEscaped(),
-             guidance.value("action").toString().toHtmlEscaped(),
-             m_findingNotes.value(title).toString().isEmpty()
-                 ? tr("Bu bulgu icin manuel analist notu eklenmedi.").toHtmlEscaped()
-                 : m_findingNotes.value(title).toString().toHtmlEscaped());
+    return buildReconFindingDetailHtml(severity, title, description, m_findingNotes.value(title).toString());
 }
 
 int ReconWidget::severityRank(const QString &severity) const
 {
-    const QString normalized = severity.trimmed().toLower();
-    if (normalized == "high" || normalized == tr("yuksek")) return 4;
-    if (normalized == "medium" || normalized == tr("orta")) return 3;
-    if (normalized == "low" || normalized == tr("dusuk")) return 2;
-    return 1;
+    return reconSeverityRank(severity);
 }
 
 QString ReconWidget::buildReportHtml(const ScanReport &report, int securityScore) const
 {
-    const QString companyName = m_companyEdit ? m_companyEdit->text().trimmed() : QStringLiteral("PenguFoce Security Lab");
-    const QString clientName = m_clientEdit ? m_clientEdit->text().trimmed() : QStringLiteral("Belirtilmedi");
-    const QString testerName = m_testerEdit ? m_testerEdit->text().trimmed() : QStringLiteral("Operator");
-    const QString classification = m_classificationEdit ? m_classificationEdit->text().trimmed() : QStringLiteral("Kurum Ici");
-    const QString scopeSummary = m_scopeEdit ? m_scopeEdit->text().trimmed()
-                                             : QStringLiteral("DNS, web guvenligi, TLS, OSINT ve acik servis degerlendirmesi");
-    const SettingsManager *settings = (m_module ? m_module->settingsManager() : nullptr);
-    const QVariantList spiderEndpoints = settings ? settings->value("modules/spider_snapshot", "endpoints").toList() : QVariantList{};
-    const QVariantList spiderParameters = settings ? settings->value("modules/spider_snapshot", "parameters").toList() : QVariantList{};
-    const QVariantList spiderAssets = settings ? settings->value("modules/spider_snapshot", "assets").toList() : QVariantList{};
-    const QVariantList spiderHighValueTargets = settings ? settings->value("modules/spider_snapshot", "highValueTargets").toList() : QVariantList{};
-    const QVariantList spiderCoverageTimeline = settings ? settings->value("modules/spider_snapshot", "coverageTimeline").toList() : QVariantList{};
-    const QVariantMap spiderCoverageBreakdown = settings ? settings->value("modules/spider_snapshot", "coverageBreakdown").toMap() : QVariantMap{};
-    const QVariantMap spiderHighValueSegments = settings ? settings->value("modules/spider_snapshot", "highValueSegments").toMap() : QVariantMap{};
-    const int spiderCoverageScore = settings ? settings->value("modules/spider_snapshot", "coverageScore", 0).toInt() : 0;
-    const QString spiderCoverageSummary = settings ? settings->value("modules/spider_snapshot", "coverageSummary").toString() : QString();
-    const QString spiderCapturedAt = settings ? settings->value("modules/spider_snapshot", "capturedAt").toString() : QString();
-    const QString spiderBenchmarkSummary = settings ? settings->value("modules/spider_snapshot", "benchmarkSummary").toString() : QString();
-    const QString spiderBenchmarkDiffSummary = settings ? settings->value("modules/spider_snapshot", "benchmarkDiffSummary").toString() : QString();
-
-    auto riskLevel = [securityScore]() {
-        if (securityScore >= 85) return QStringLiteral("Dusuk");
-        if (securityScore >= 65) return QStringLiteral("Orta");
-        return QStringLiteral("Yuksek");
-    };
-
-    auto scoreGrade = [securityScore]() {
-        if (securityScore >= 85) return QStringLiteral("A");
-        if (securityScore >= 70) return QStringLiteral("B");
-        if (securityScore >= 55) return QStringLiteral("C");
-        return QStringLiteral("D");
-    };
-
-    QString findingsHtml;
-    QString detailedFindingsHtml;
-    for (const QVariant &value : report.findings) {
-        const QVariantMap finding = value.toMap();
-        const QString category = finding.value("category").toString();
-        const QString title = finding.value("title").toString();
-        const QString description = finding.value("description").toString();
-        const QVariantMap guidance = developerGuidanceForFinding(title, description);
-        QString recommendation = tr("Servis ihtiyaci, maruziyet ve is etkisi birlikte degerlendirilerek duzeltici aksiyon tanimlanmali.");
-        if (category == "web") {
-            recommendation = tr("Eksik web guvenlik basliklari ve sunucu sertlestirmesi devreye alinmali.");
-        } else if (category == "dns") {
-            recommendation = tr("SPF, DMARC ve MX politikasi kurumsal e-posta mimarisine uygun sekilde tamamlanmali.");
-        } else if (category == "ports") {
-            recommendation = tr("Acik servis maruziyeti en aza indirilmeli, yonetim portlari kisitlanmali.");
-        } else if (category == "tls") {
-            recommendation = tr("TLS sertifikasi yenilenmeli ve eski protokoller kapatilmalidir.");
-        } else if (category == "osint") {
-            recommendation = tr("Harici kaynaklarda gorunen veri ve varlik izi azaltilmali, sizinti takibi yapilmalidir.");
-        }
-
-        findingsHtml += QString("<tr><td>%1</td><td>%2</td><td>%3</td><td>%4</td><td>%5</td></tr>")
-                            .arg(finding.value("severity").toString().toUpper(),
-                                 title.toHtmlEscaped(),
-                                 description.toHtmlEscaped(),
-                                 category.toHtmlEscaped(),
-                                 recommendation.toHtmlEscaped());
-
-        detailedFindingsHtml += QString(
-                                    "<div style='margin:0 0 18px 0; padding:12px 14px; border:1px solid #cfd6df; border-radius:8px;'>"
-                                    "<h3 style='margin:0 0 8px 0; font-size:13pt;'>%1</h3>"
-                                    "<p style='margin:0 0 6px 0;'><b>Oncelik:</b> %2</p>"
-                                    "<p style='margin:0 0 6px 0;'><b>Acigin Teknik Nedeni:</b> %3</p>"
-                                    "<p style='margin:0 0 6px 0;'><b>Olasi Riskler:</b> %4</p>"
-                                    "<p style='margin:0 0 6px 0;'><b>Saldirgan Ne Yapabilir?</b> %5</p>"
-                                    "<p style='margin:0 0 6px 0;'><b>Yazilim Ekibi Icin Uygulama Notu:</b> %6</p>"
-                                    "<p style='margin:0;'><b>Kapatma ve Iyilestirme Adimi:</b> %7</p>"
-                                    "</div>")
-                                    .arg(title.toHtmlEscaped(),
-                                         finding.value("severity").toString().toUpper(),
-                                         description.toHtmlEscaped(),
-                                         guidance.value("riskNames").toString().toHtmlEscaped(),
-                                         guidance.value("attackerPlay").toString().toHtmlEscaped(),
-                                         guidance.value("developerNotes").toString().toHtmlEscaped(),
-                                         guidance.value("action").toString().toHtmlEscaped());
+    ReconReportContext context;
+    context.companyName = m_companyEdit ? m_companyEdit->text().trimmed() : QString();
+    context.clientName = m_clientEdit ? m_clientEdit->text().trimmed() : QString();
+    context.testerName = m_testerEdit ? m_testerEdit->text().trimmed() : QString();
+    context.classification = m_classificationEdit ? m_classificationEdit->text().trimmed() : QString();
+    context.scopeSummary = m_scopeEdit ? m_scopeEdit->text().trimmed() : QString();
+    if (const SettingsManager *settings = (m_module ? m_module->settingsManager() : nullptr)) {
+        context.spiderSnapshot = QVariantMap{
+            {"endpoints", settings->value("modules/spider_snapshot", "endpoints").toList()},
+            {"parameters", settings->value("modules/spider_snapshot", "parameters").toList()},
+            {"assets", settings->value("modules/spider_snapshot", "assets").toList()},
+            {"highValueTargets", settings->value("modules/spider_snapshot", "highValueTargets").toList()},
+            {"coverageTimeline", settings->value("modules/spider_snapshot", "coverageTimeline").toList()},
+            {"coverageBreakdown", settings->value("modules/spider_snapshot", "coverageBreakdown").toMap()},
+            {"highValueSegments", settings->value("modules/spider_snapshot", "highValueSegments").toMap()},
+            {"coverageScore", settings->value("modules/spider_snapshot", "coverageScore", 0)},
+            {"coverageSummary", settings->value("modules/spider_snapshot", "coverageSummary")},
+            {"capturedAt", settings->value("modules/spider_snapshot", "capturedAt")},
+            {"benchmarkSummary", settings->value("modules/spider_snapshot", "benchmarkSummary")},
+            {"benchmarkDiffSummary", settings->value("modules/spider_snapshot", "benchmarkDiffSummary")}
+        };
     }
-    if (findingsHtml.isEmpty()) {
-        findingsHtml = "<tr><td colspan='5'>Kritik bulgu kaydi olusmadi.</td></tr>";
-        detailedFindingsHtml = "<p>Detaylandirilacak teknik bulgu kaydi olusmadi.</p>";
-    }
-
-    QString portHtml;
-    for (const QVariant &value : report.openPorts) {
-        const QVariantMap row = value.toMap();
-        portHtml += QString("<li>%1 / %2</li>")
-                        .arg(row.value("port").toString().toHtmlEscaped(),
-                             row.value("service").toString().toHtmlEscaped());
-    }
-    if (portHtml.isEmpty()) {
-        portHtml = "<li>Acik servis tespit edilmedi.</li>";
-    }
-
-    QString dnsHtml;
-    for (const QVariant &value : report.dnsRecords) {
-        const QVariantMap row = value.toMap();
-        dnsHtml += QString("<li><b>%1</b>: %2</li>")
-                       .arg(row.value("type").toString().toHtmlEscaped(),
-                            row.value("value").toString().toHtmlEscaped());
-    }
-    if (dnsHtml.isEmpty()) {
-        dnsHtml = "<li>DNS kaydi toplanamadi.</li>";
-    }
-
-    QString webHtml;
-    for (const QVariant &value : report.webObservations) {
-        const QVariantMap row = value.toMap();
-        const QString waf = row.value("waf").toString();
-        const QString wafText = waf.isEmpty()
-                                    ? tr("WAF izi gorulmedi")
-                                    : tr("WAF: %1").arg(waf);
-        webHtml += QString("<li>%1 - HTTP %2 - Sunucu: %3 - Surum izi: %4 - %5</li>")
-                       .arg(row.value("url").toString().toHtmlEscaped(),
-                            row.value("status").toString().toHtmlEscaped(),
-                            row.value("server").toString().toHtmlEscaped(),
-                            row.value("version").toString().toHtmlEscaped(),
-                            wafText.toHtmlEscaped());
-    }
-    if (webHtml.isEmpty()) {
-        webHtml = "<li>Web guvenligi verisi toplanamadi.</li>";
-    }
-
-    QString osintHtml;
-    for (const QVariant &value : report.osintObservations) {
-        const QVariantMap row = value.toMap();
-        const QString details = row.value("details").toString().isEmpty()
-                                    ? tr("Harici kayit veya gosterge bulundu")
-                                    : row.value("details").toString();
-        osintHtml += QString("<li>%1 - %2</li>")
-                         .arg(row.value("source").toString().toHtmlEscaped(),
-                              details.toHtmlEscaped());
-    }
-    if (osintHtml.isEmpty()) {
-        osintHtml = "<li>OSINT veya sizinti kaydi bulunmadi.</li>";
-    }
-
-    QString subdomainHtml;
-    for (const QVariant &value : report.subdomains) {
-        subdomainHtml += QString("<li>%1</li>").arg(value.toString().toHtmlEscaped());
-    }
-    if (subdomainHtml.isEmpty()) {
-        subdomainHtml = "<li>Dogrulanmis alt alan adi kaydi bulunmadi.</li>";
-    }
-
-    QString archiveHtml;
-    for (const QVariant &value : report.archivedUrls) {
-        archiveHtml += QString("<li>%1</li>").arg(value.toString().toHtmlEscaped());
-    }
-    if (archiveHtml.isEmpty()) {
-        archiveHtml = "<li>Wayback veya gizli endpoint kaydi bulunmadi.</li>";
-    }
-
-    QString jsHtml;
-    for (const QVariant &value : report.jsFindings) {
-        const QVariantMap row = value.toMap();
-        jsHtml += QString("<li>%1 - %2 (%3)</li>")
-                      .arg(row.value("type").toString().toHtmlEscaped(),
-                           row.value("value").toString().toHtmlEscaped(),
-                           row.value("source").toString().toHtmlEscaped());
-    }
-    if (jsHtml.isEmpty()) {
-        jsHtml = "<li>JavaScript analizi bulgusu uretilmedi.</li>";
-    }
-
-    QString cveHtml;
-    for (const QVariant &value : report.cveMatches) {
-        const QVariantMap row = value.toMap();
-        cveHtml += QString("<li>%1 %2 - %3 - %4</li>")
-                       .arg(row.value("product").toString().toHtmlEscaped(),
-                            row.value("version").toString().toHtmlEscaped(),
-                            row.value("cve").toString().toHtmlEscaped(),
-                            row.value("summary").toString().toHtmlEscaped());
-    }
-    if (cveHtml.isEmpty()) {
-        cveHtml = "<li>Yerel CVE eslesmesi bulunmadi.</li>";
-    }
-
-    QString nameServersHtml;
-    for (const QVariant &value : report.whoisInfo.value("nameServers").toList()) {
-        nameServersHtml += QString("<li>%1</li>").arg(value.toString().toHtmlEscaped());
-    }
-    if (nameServersHtml.isEmpty()) {
-        nameServersHtml = "<li>Name server bilgisi parse edilemedi.</li>";
-    }
-
-    const QString whoisHtml = report.whoisInfo.isEmpty()
-                                  ? QStringLiteral("<p>Whois bilgisi toplanamadi.</p>")
-                                  : QString(
-                                        "<p><b>Domain:</b> %1<br>"
-                                        "<b>Kayit Otoritesi:</b> %2<br>"
-                                        "<b>Registrar:</b> %3<br>"
-                                        "<b>Kayit Tarihi:</b> %4<br>"
-                                        "<b>Guncelleme Tarihi:</b> %5<br>"
-                                        "<b>Bitis Tarihi:</b> %6<br>"
-                                        "<b>Durum:</b> %7</p>"
-                                        "<p><b>Name Server'lar:</b></p><ul>%8</ul>"
-                                        "<p><b>Ham Ozet:</b><br>%9</p>")
-                                        .arg(report.whoisInfo.value("domain").toString().toHtmlEscaped(),
-                                             report.whoisInfo.value("registry").toString().toHtmlEscaped(),
-                                             report.whoisInfo.value("registrar").toString().toHtmlEscaped(),
-                                             report.whoisInfo.value("created").toString().toHtmlEscaped(),
-                                             report.whoisInfo.value("updated").toString().toHtmlEscaped(),
-                                             report.whoisInfo.value("expiry").toString().toHtmlEscaped(),
-                                             report.whoisInfo.value("status").toString().toHtmlEscaped(),
-                                        nameServersHtml,
-                                         report.whoisInfo.value("raw").toString().toHtmlEscaped());
-    const QString spiderEndpointHtml = renderSpiderEndpointHtml(spiderEndpoints);
-    const QString spiderParameterHtml = renderSpiderParameterHtml(spiderParameters);
-    const QString spiderAssetHtml = renderSpiderAssetHtml(spiderAssets);
-    const QString spiderAuthHtml = renderSpiderAuthHtml(spiderAssets);
-    const QString spiderDeltaHtml = renderSpiderDeltaHtml(spiderAssets);
-    QString spiderHighValueHtml;
-    for (const QVariant &value : spiderHighValueTargets) {
-        const QVariantMap row = value.toMap();
-        spiderHighValueHtml += QString("<li><b>%1</b> - %2</li>")
-                                   .arg(row.value("label").toString().toHtmlEscaped(),
-                                        row.value("value").toString().toHtmlEscaped());
-    }
-    if (spiderHighValueHtml.isEmpty()) {
-        spiderHighValueHtml = "<li>Yuksek degerli spider yuzeyi kaydi bulunmadi.</li>";
-    }
-    const QString spiderSegmentHtml = renderSpiderSegmentHtml(spiderHighValueSegments);
-    QString spiderTimelineHtml;
-    for (const QVariant &value : spiderCoverageTimeline) {
-        const QVariantMap row = value.toMap();
-        spiderTimelineHtml += QString("<li>[%1] <b>%2</b> - %3 <span style='color:#5b6677'>(%4)</span></li>")
-                                  .arg(row.value("time").toString().toHtmlEscaped(),
-                                       row.value("title").toString().toHtmlEscaped(),
-                                       row.value("detail").toString().toHtmlEscaped(),
-                                       row.value("stage").toString().toHtmlEscaped());
-    }
-    if (spiderTimelineHtml.isEmpty()) {
-        spiderTimelineHtml = "<li>Coverage timeline kaydi bulunmadi.</li>";
-    }
-    const QString spiderCoverageHtml = tr("Coverage %1/100 | %2 | auth %3 | form %4 | js %5 | secret %6 | admin %7 | upload %8 | delta %9 | korunan %10 | render %11 | automation %12")
-                                           .arg(spiderCoverageScore)
-                                           .arg(spiderCoverageSummary)
-                                           .arg(spiderCoverageBreakdown.value("auth").toInt())
-                                           .arg(spiderCoverageBreakdown.value("form").toInt())
-                                           .arg(spiderCoverageBreakdown.value("js").toInt())
-                                           .arg(spiderCoverageBreakdown.value("secret").toInt())
-                                           .arg(spiderCoverageBreakdown.value("admin").toInt())
-                                           .arg(spiderCoverageBreakdown.value("upload").toInt())
-                                           .arg(spiderCoverageBreakdown.value("delta").toInt())
-                                           .arg(spiderCoverageBreakdown.value("protected").toInt())
-                                           .arg(spiderCoverageBreakdown.value("render").toInt())
-                                           .arg(spiderCoverageBreakdown.value("automation").toInt());
-    const QString spiderSummaryHtml = spiderCapturedAt.isEmpty()
-                                          ? tr("Bu rapora bagli son spider snapshot kaydi bulunmadi.")
-                                          : tr("Spider bulgulari bu rapora otomatik olarak dahil edildi. Son snapshot zamani: %1").arg(QDateTime::fromString(spiderCapturedAt, Qt::ISODate).toString("dd.MM.yyyy HH:mm:ss"));
-    const QString spiderBenchmarkHtml = spiderBenchmarkSummary.isEmpty()
-                                            ? tr("Benchmark ozeti bulunmadi.")
-                                            : tr("Benchmark: %1").arg(spiderBenchmarkSummary);
-    const QString spiderBenchmarkDiffHtml = spiderBenchmarkDiffSummary.isEmpty()
-                                                ? tr("Onceki kosa gore degisim bilgisi bulunmadi.")
-                                                : tr("Karsilastirma: %1").arg(spiderBenchmarkDiffSummary);
-
-    return QString(
-               "<html><body style='font-family:Bahnschrift;font-size:12pt;line-height:1.45;padding:0;color:#171a20;'>"
-               "<div style='border-bottom:2px solid #8f1732;padding-bottom:12px;margin-bottom:18px;'>"
-               "<h1 style='margin:0;font-size:24pt;'>PenguFoce Sizma Testi ve Kesif Raporu</h1>"
-               "<p style='margin:8px 0 0 0;font-size:11pt;'><b>Hazirlayan Kurum:</b> %1<br><b>Musteri:</b> %2<br><b>Test Uzmani:</b> %3<br><b>Siniflandirma:</b> %4<br><b>Rapor Tarihi:</b> %5</p>"
-               "</div>"
-               "<h2 style='font-size:16pt;'>1. Yonetici Ozeti</h2>"
-               "<p>Bu rapor, hedef varlik uzerinde otomatik kesif ve ilk seviye guvenlik degerlendirmesi ile elde edilen teknik bulgularin yonetsel ozetini sunar. Hedef icin hesaplanan guvenlik puani <b>%6/100</b>, olgunluk notu <b>%7</b> ve genel risk seviyesi <b>%8</b> olarak hesaplanmistir.</p>"
-               "<h2 style='font-size:16pt;'>2. Kapsam ve Metodoloji</h2>"
-               "<p><b>Hedef:</b> %9<br><b>Cozumlenen IP:</b> %10<br><b>Kapsam:</b> %11</p>"
-               "<p>Calisma; DNS kayitlarinin incelenmesi, web guvenlik basliklarinin kontrolu, TLS sertifika/protokol gozlemleri, acik servis tespiti, opsiyonel OSINT veri kaynaklarinin korelasyonu ve mevcutsa spider tabanli uygulama yuzeyi kesfi ile yurutulmustur.</p>"
-               "<h2 style='font-size:16pt;'>3. Acik Servis Ozetleri</h2><ul>%12</ul>"
-               "<h2 style='font-size:16pt;'>4. DNS ve Politika Gozlemleri</h2><ul>%13</ul>"
-               "<h2 style='font-size:16pt;'>5. Web ve TLS Gozlemleri</h2><ul>%14</ul>"
-               "<h2 style='font-size:16pt;'>6. OSINT ve Sizinti Gozlemleri</h2><ul>%15</ul>"
-               "<h2 style='font-size:16pt;'>7. Alt Alan Adi ve Yuzey Genisleme Sonuclari</h2><ul>%16</ul>"
-               "<h2 style='font-size:16pt;'>8. Wayback ve Gizli Endpoint Gozlemleri</h2><ul>%17</ul>"
-               "<h2 style='font-size:16pt;'>9. JavaScript Analizi</h2><ul>%18</ul>"
-               "<h2 style='font-size:16pt;'>10. CVE ve Surum Eslestirmeleri</h2><ul>%19</ul>"
-               "<h2 style='font-size:16pt;'>11. Whois Bilgileri</h2>%20"
-               "<h2 style='font-size:16pt;'>12. Spider Endpoint Ozetleri</h2><p>%21</p><ul>%22</ul>"
-               "<h2 style='font-size:16pt;'>13. Spider Parametre ve Form Girdileri</h2><ul>%23</ul>"
-               "<h2 style='font-size:16pt;'>14. Spider Asset ve Literal Bulgulari</h2><ul>%24</ul>"
-               "<h2 style='font-size:16pt;'>15. Spider Oturum ve Kanit Izleri</h2><ul>%25</ul>"
-               "<h2 style='font-size:16pt;'>16. Oturum Sonrasi Yeni Yuzey Farklari</h2><ul>%26</ul>"
-               "<h2 style='font-size:16pt;'>17. Spider Coverage, Benchmark ve Kritik Yuzey</h2><p>%27</p><p>%28</p><p>%29</p><h3 style='font-size:13pt;'>Segment Bazli Kritik Yuzey</h3><ul>%30</ul><h3 style='font-size:13pt;'>Yuksek Degerli Hedefler</h3><ul>%31</ul><h3 style='font-size:13pt;'>Coverage Timeline</h3><ul>%32</ul>"
-               "<h2 style='font-size:16pt;'>18. Detayli Bulgu Tablosu</h2>"
-               "<table border='1' cellspacing='0' cellpadding='8' width='100%%' style='font-size:10.5pt;border-collapse:collapse;'>"
-               "<tr><th>Oncelik</th><th>Baslik</th><th>Aciklama</th><th>Kategori</th><th>Onerilen Aksiyon</th></tr>%33</table>"
-               "<h2 style='font-size:16pt;'>19. Gelistirici Ekip Icin Teknik Bulgular</h2>%34"
-               "<h2 style='font-size:16pt;'>20. Sonuc ve Oneri</h2>"
-               "<p>Yuksek ve orta oncelikli bulgular birinci asamada ele alinmali, ardindan servis maruziyeti ve DNS politika eksikleri giderilmelidir. Kritik sistemlerde otomatik kesif bulgulari mutlaka manuel dogrulama ve ikinci asama uygulama testi ile desteklenmelidir. Uygulama ekibi, operasyon ekibi ve altyapi sorumlulari bulgulari ortak backlog olarak ele alip her bulgu icin sahiplik atamalidir.</p>"
-               "</body></html>")
-        .arg(companyName.toHtmlEscaped(),
-             clientName.toHtmlEscaped(),
-             testerName.toHtmlEscaped(),
-             classification.toHtmlEscaped(),
-             QDateTime::currentDateTime().toString("dd.MM.yyyy HH:mm"),
-             QString::number(securityScore),
-             scoreGrade(),
-             riskLevel(),
-             report.sanitizedTarget.toHtmlEscaped(),
-             report.resolvedIp.toHtmlEscaped(),
-             scopeSummary.toHtmlEscaped(),
-             portHtml,
-             dnsHtml,
-             webHtml,
-             osintHtml,
-             subdomainHtml,
-             archiveHtml,
-             jsHtml,
-             cveHtml,
-             whoisHtml,
-             spiderSummaryHtml.toHtmlEscaped(),
-             spiderEndpointHtml,
-             spiderParameterHtml,
-             spiderAssetHtml,
-             spiderAuthHtml,
-             spiderDeltaHtml,
-             spiderCoverageHtml.toHtmlEscaped(),
-             spiderBenchmarkHtml.toHtmlEscaped(),
-             spiderBenchmarkDiffHtml.toHtmlEscaped(),
-             spiderSegmentHtml,
-             spiderHighValueHtml,
-             spiderTimelineHtml,
-             findingsHtml,
-             detailedFindingsHtml);
+    context.findingNotes = m_findingNotes;
+    return buildReconReportHtml(context, report, securityScore);
 }
 
 void ReconWidget::exportReport()
@@ -2777,14 +2047,17 @@ void ReconWidget::exportReport()
     }
 
     delete m_reportPreviewDialog;
-    auto *dialog = new ReportPreviewDialog(this);
+    auto *dialog = new ReportPreviewDialog(tr("Rapor Onizlemesi"),
+                                           tr("Bu pencere PDF ciktisinin onizlemesini gosterir. Kaydetme islemleri sadece burada yapilir."),
+                                           tr("PDF Kaydet"),
+                                           tr("HTML Kaydet"),
+                                           this);
     m_reportPreviewDialog = dialog;
-    m_reportPreviewView = dialog->view();
-    m_reportPreviewView->setHtml(m_lastReportHtml);
+    dialog->view()->setHtml(m_lastReportHtml);
     const QString companyName = m_companyEdit ? m_companyEdit->text() : QString();
     const QString targetName = m_targetEdit ? m_targetEdit->text() : QString();
-    const QString pdfDefaultName = corporateReportFileName(companyName, targetName, "pdf");
-    const QString htmlDefaultName = corporateReportFileName(companyName, targetName, "html");
+    const QString pdfDefaultName = reconCorporateReportFileName(companyName, targetName, "pdf");
+    const QString htmlDefaultName = reconCorporateReportFileName(companyName, targetName, "html");
 
     connect(dialog->savePdfButton(), &QPushButton::clicked, dialog, [this, dialog, pdfDefaultName]() {
         const QString path = QFileDialog::getSaveFileName(dialog,

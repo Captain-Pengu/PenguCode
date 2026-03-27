@@ -3,8 +3,11 @@
 #include <QDataStream>
 #include <QDateTime>
 #include <QFile>
+#include <QHash>
 #include <QTimeZone>
 #include <QtEndian>
+
+#include <algorithm>
 
 namespace pengufoce::pengucore {
 
@@ -18,7 +21,9 @@ constexpr quint32 kPcapNgMagic = 0x0a0d0d0au;
 constexpr quint32 kPcapNgByteOrderMagic = 0x1a2b3c4du;
 constexpr quint32 kPcapNgSectionHeaderBlock = 0x0a0d0d0au;
 constexpr quint32 kPcapNgInterfaceDescriptionBlock = 0x00000001u;
+constexpr quint32 kPcapNgSimplePacketBlock = 0x00000003u;
 constexpr quint32 kPcapNgEnhancedPacketBlock = 0x00000006u;
+constexpr quint16 kPcapNgIfTsResolOption = 9u;
 
 quint16 read16(const char *data, bool littleEndian)
 {
@@ -46,12 +51,31 @@ QDateTime timestampFromSeconds(quint32 seconds, quint32 fraction, bool nanoResol
     return timestamp.addMSecs(msec);
 }
 
-QDateTime timestampFromPcapNg(quint32 high, quint32 low)
+qint64 timestampResolutionDivisor(quint8 tsResol)
+{
+    if ((tsResol & 0x80u) == 0u) {
+        qint64 divisor = 1;
+        for (int i = 0; i < tsResol; ++i) {
+            divisor *= 10;
+        }
+        return divisor;
+    }
+
+    const quint8 power = tsResol & 0x7fu;
+    qint64 divisor = 1;
+    for (int i = 0; i < power; ++i) {
+        divisor *= 2;
+    }
+    return divisor;
+}
+
+QDateTime timestampFromPcapNg(quint32 high, quint32 low, qint64 divisor)
 {
     const quint64 combined = (static_cast<quint64>(high) << 32) | static_cast<quint64>(low);
-    const qint64 microseconds = static_cast<qint64>(combined);
-    const qint64 seconds = microseconds / 1000000ll;
-    const qint64 millis = (microseconds % 1000000ll) / 1000ll;
+    const qint64 ticks = static_cast<qint64>(combined);
+    const qint64 safeDivisor = std::max<qint64>(1, divisor);
+    const qint64 seconds = ticks / safeDivisor;
+    const qint64 millis = ((ticks % safeDivisor) * 1000ll) / safeDivisor;
     return QDateTime::fromSecsSinceEpoch(seconds, QTimeZone::UTC).addMSecs(millis);
 }
 
@@ -72,14 +96,19 @@ bool readPcapNgFile(QFile &file, PcapFileReader::Result &result)
 
     const quint32 byteOrderMagicBig = qFromBigEndian<quint32>(reinterpret_cast<const uchar *>(sectionHeader.constData() + 8));
     const quint32 byteOrderMagicLittle = qFromLittleEndian<quint32>(reinterpret_cast<const uchar *>(sectionHeader.constData() + 8));
-    const bool littleEndian = (byteOrderMagicLittle == kPcapNgByteOrderMagic);
-    if (!littleEndian || byteOrderMagicBig != 0x4d3c2b1au) {
-        result.errorMessage = QStringLiteral("Bu ilk surum yalnizca little-endian pcapng destekliyor.");
+    bool littleEndian = false;
+    if (byteOrderMagicLittle == kPcapNgByteOrderMagic) {
+        littleEndian = true;
+    } else if (byteOrderMagicBig == kPcapNgByteOrderMagic) {
+        littleEndian = false;
+    } else {
+        result.errorMessage = QStringLiteral("Gecersiz pcapng byte-order magic.");
         return false;
     }
 
     file.seek(0);
     int frameNumber = 1;
+    QHash<quint32, qint64> interfaceResolutionById;
     while (!file.atEnd()) {
         const QByteArray blockHeader = file.read(8);
         if (blockHeader.isEmpty()) {
@@ -91,8 +120,8 @@ bool readPcapNgFile(QFile &file, PcapFileReader::Result &result)
             return false;
         }
 
-        const quint32 currentBlockType = read32(blockHeader, 0, true);
-        const quint32 blockTotalLength = read32(blockHeader, 4, true);
+        const quint32 currentBlockType = read32(blockHeader, 0, littleEndian);
+        const quint32 blockTotalLength = read32(blockHeader, 4, littleEndian);
         if (blockTotalLength < 12) {
             result.errorMessage = QStringLiteral("Gecersiz pcapng block uzunlugu.");
             result.frames.clear();
@@ -107,11 +136,37 @@ bool readPcapNgFile(QFile &file, PcapFileReader::Result &result)
             return false;
         }
 
-        const quint32 trailingBlockLength = read32(trailingLength.constData(), true);
+        const quint32 trailingBlockLength = read32(trailingLength.constData(), littleEndian);
         if (trailingBlockLength != blockTotalLength) {
             result.errorMessage = QStringLiteral("Pcapng block uzunlugu tutarsiz.");
             result.frames.clear();
             return false;
+        }
+
+        if (currentBlockType == kPcapNgInterfaceDescriptionBlock) {
+            if (body.size() >= 8) {
+                quint32 interfaceId = static_cast<quint32>(interfaceResolutionById.size());
+                qint64 divisor = 1000000ll;
+                int offset = 8;
+                while (offset + 4 <= body.size()) {
+                    const quint16 optionCode = read16(body.constData() + offset, littleEndian);
+                    const quint16 optionLength = read16(body.constData() + offset + 2, littleEndian);
+                    offset += 4;
+                    if (optionCode == 0) {
+                        break;
+                    }
+                    if (offset + optionLength > body.size()) {
+                        break;
+                    }
+                    if (optionCode == kPcapNgIfTsResolOption && optionLength >= 1) {
+                        divisor = timestampResolutionDivisor(static_cast<quint8>(body.at(offset)));
+                    }
+                    offset += optionLength;
+                    offset += (4 - (optionLength % 4)) % 4;
+                }
+                interfaceResolutionById.insert(interfaceId, divisor);
+            }
+            continue;
         }
 
         if (currentBlockType == kPcapNgEnhancedPacketBlock) {
@@ -121,10 +176,11 @@ bool readPcapNgFile(QFile &file, PcapFileReader::Result &result)
                 return false;
             }
 
-            const quint32 timestampHigh = read32(body, 4, true);
-            const quint32 timestampLow = read32(body, 8, true);
-            const quint32 capturedLength = read32(body, 12, true);
-            const quint32 originalLength = read32(body, 16, true);
+            const quint32 interfaceId = read32(body, 0, littleEndian);
+            const quint32 timestampHigh = read32(body, 4, littleEndian);
+            const quint32 timestampLow = read32(body, 8, littleEndian);
+            const quint32 capturedLength = read32(body, 12, littleEndian);
+            const quint32 originalLength = read32(body, 16, littleEndian);
             if (body.size() < 20 + static_cast<int>(capturedLength)) {
                 result.errorMessage = QStringLiteral("Pcapng packet payload eksik.");
                 result.frames.clear();
@@ -133,12 +189,28 @@ bool readPcapNgFile(QFile &file, PcapFileReader::Result &result)
 
             RawFrame frame;
             frame.frameNumber = frameNumber++;
-            frame.timestampUtc = timestampFromPcapNg(timestampHigh, timestampLow);
+            frame.timestampUtc = timestampFromPcapNg(timestampHigh, timestampLow,
+                                                     interfaceResolutionById.value(interfaceId, 1000000ll));
             frame.capturedLength = static_cast<int>(capturedLength);
             frame.originalLength = static_cast<int>(originalLength);
             frame.bytes = body.mid(20, static_cast<int>(capturedLength));
             result.frames.push_back(frame);
-        } else if (currentBlockType == kPcapNgSectionHeaderBlock || currentBlockType == kPcapNgInterfaceDescriptionBlock) {
+        } else if (currentBlockType == kPcapNgSimplePacketBlock) {
+            if (body.size() < 4) {
+                result.errorMessage = QStringLiteral("Eksik Simple Packet Block bulundu.");
+                result.frames.clear();
+                return false;
+            }
+            const quint32 originalLength = read32(body, 0, littleEndian);
+            const int payloadLength = static_cast<int>(std::min<quint32>(originalLength, static_cast<quint32>(body.size() - 4)));
+            RawFrame frame;
+            frame.frameNumber = frameNumber++;
+            frame.timestampUtc = {};
+            frame.capturedLength = payloadLength;
+            frame.originalLength = static_cast<int>(originalLength);
+            frame.bytes = body.mid(4, payloadLength);
+            result.frames.push_back(frame);
+        } else if (currentBlockType == kPcapNgSectionHeaderBlock) {
             continue;
         }
     }

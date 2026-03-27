@@ -54,6 +54,38 @@ QVariantMap PenguCoreModule::defaultSettings() const
     return {};
 }
 
+QVariantMap PenguCoreModule::saveState() const
+{
+    return {
+        {"lastOpenedFile", m_engine.lastOpenedFile()},
+        {"lastOpenedFormat", m_engine.lastOpenedFormat()},
+        {"liveFilter", m_engine.liveCaptureFilter()},
+        {"liveSaveFormat", m_engine.liveSaveFormat()},
+        {"liveHealth", m_engine.liveHealthStatus()}
+    };
+}
+
+bool PenguCoreModule::loadState(const QVariantMap &state)
+{
+    m_engine.setLiveCaptureFilter(state.value("liveFilter").toString());
+    m_engine.setLiveSaveFormat(state.value("liveSaveFormat").toString());
+    const QString lastOpenedFile = state.value("lastOpenedFile").toString();
+    if (!lastOpenedFile.isEmpty()) {
+        m_engine.openCaptureFile(lastOpenedFile);
+    }
+    return true;
+}
+
+void PenguCoreModule::reset()
+{
+    m_engine.clearSession();
+}
+
+QString PenguCoreModule::healthStatus() const
+{
+    return m_engine.isLiveCaptureRunning() ? m_engine.liveHealthStatus() : QStringLiteral("HEALTHY");
+}
+
 pengufoce::pengucore::PenguCoreEngine *PenguCoreModule::engine()
 {
     return &m_engine;

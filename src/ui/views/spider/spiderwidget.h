@@ -17,6 +17,7 @@ class QTabWidget;
 class QTextEdit;
 class QDialog;
 class QTimer;
+class ReportPreviewDialog;
 
 class SpiderWidget : public QWidget
 {
@@ -40,6 +41,7 @@ private slots:
     void refreshWorkflowValidation();
     void updateEvidenceDetail();
     void exportReport();
+    void exportHostDiagnostics();
     void scheduleStatsRefresh();
     void pollStalledState();
 
@@ -80,12 +82,14 @@ private:
     QTabWidget *m_workTabs = nullptr;
     QComboBox *m_endpointFilterCombo = nullptr;
     QComboBox *m_assetFilterCombo = nullptr;
+    QComboBox *m_hostFilterCombo = nullptr;
     QLabel *m_statusValue = nullptr;
     QLabel *m_countsValue = nullptr;
     QLabel *m_coverageValue = nullptr;
     QLabel *m_coverageSummaryLabel = nullptr;
     QLabel *m_coverageBreakdownLabel = nullptr;
     QLabel *m_automationLabel = nullptr;
+    QLabel *m_hostHealthSummaryLabel = nullptr;
     QLabel *m_benchmarkLabel = nullptr;
     QLabel *m_benchmarkDiffLabel = nullptr;
     QLabel *m_regressionLabel = nullptr;
@@ -101,12 +105,20 @@ private:
     QListWidget *m_evidenceList = nullptr;
     QListWidget *m_featureList = nullptr;
     QListWidget *m_hostHealthList = nullptr;
+    QListWidget *m_hostTimelineList = nullptr;
+    QLabel *m_hostStableValue = nullptr;
+    QLabel *m_hostGuardedValue = nullptr;
+    QLabel *m_hostWafValue = nullptr;
+    QLabel *m_hostStressedValue = nullptr;
+    QLabel *m_hostReplayDiffLabel = nullptr;
+    QLabel *m_hostPressureTrendLabel = nullptr;
     QTextEdit *m_evidenceDetailView = nullptr;
     QPushButton *m_startButton = nullptr;
     QPushButton *m_stopButton = nullptr;
     QPushButton *m_previewReportButton = nullptr;
+    QPushButton *m_exportHostDiagnosticsButton = nullptr;
     QString m_lastReportHtml;
-    QDialog *m_reportPreviewDialog = nullptr;
+    ReportPreviewDialog *m_reportPreviewDialog = nullptr;
     QTimer *m_statsRefreshTimer = nullptr;
     QTimer *m_stateWatchdogTimer = nullptr;
     qint64 m_lastHeavyRefreshMs = 0;

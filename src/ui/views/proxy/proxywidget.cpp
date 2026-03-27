@@ -3,6 +3,8 @@
 #include "modules/proxy/proxymodule.h"
 #include "ui/layout/flowlayout.h"
 #include "ui/layout/workspacecontainers.h"
+#include "ui/views/proxy/proxybottompanel.h"
+#include "ui/views/proxy/proxyruntimepanel.h"
 
 #include <QAbstractItemView>
 #include <QCheckBox>
@@ -571,244 +573,36 @@ ProxyWidget::ProxyWidget(ProxyModule *module, QWidget *parent)
     focusLayout->addLayout(focusTextCol, 2);
     focusLayout->addWidget(m_holoWidget, 1);
 
-    auto *proxyCard = pengufoce::ui::layout::createCard(this, QStringLiteral("cardPanel"), QMargins(22, 22, 22, 22), 16);
+    auto *proxyCard = new ProxyRuntimePanel(this);
     proxyCard->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
-    auto *proxyLayout = qobject_cast<QVBoxLayout *>(proxyCard->layout());
-
-    auto *proxyTitle = new QLabel(tr("Proxy Gateway"), proxyCard);
-    proxyTitle->setObjectName("sectionTitle");
-    auto *proxyInfo = new QLabel(tr("Yerel arastirma koprusu, hedef endpoint ve canli trafik metrikleri."), proxyCard);
-    proxyInfo->setObjectName("mutedText");
-    proxyInfo->setWordWrap(true);
-
-    auto *statHost = new QWidget(proxyCard);
-    auto *statRow = new FlowLayout(statHost, 0, 12, 12);
-    auto *flowCard = new QFrame(proxyCard);
-    flowCard->setObjectName("summaryCard");
-    auto *flowLayout = new QVBoxLayout(flowCard);
-    flowLayout->setContentsMargins(14, 14, 14, 14);
-    auto *flowLabel = new QLabel(tr("Traffic State"), flowCard);
-    flowLabel->setObjectName("mutedText");
-    m_flowValue = new QLabel(tr("Idle"), flowCard);
-    m_flowValue->setObjectName("statValue");
-    flowLayout->addWidget(flowLabel);
-    flowLayout->addWidget(m_flowValue);
-
-    auto *healthCard = new QFrame(proxyCard);
-    healthCard->setObjectName("summaryCard");
-    auto *healthLayout = new QVBoxLayout(healthCard);
-    healthLayout->setContentsMargins(14, 14, 14, 14);
-    auto *healthLabel = new QLabel(tr("Link Health"), healthCard);
-    healthLabel->setObjectName("mutedText");
-    m_healthValue = new QLabel(tr("Armed"), healthCard);
-    m_healthValue->setObjectName("statValue");
-    healthLayout->addWidget(healthLabel);
-    healthLayout->addWidget(m_healthValue);
-
-    auto *sessionsCard = new QFrame(proxyCard);
-    sessionsCard->setObjectName("summaryCard");
-    auto *sessionsLayout = new QVBoxLayout(sessionsCard);
-    sessionsLayout->setContentsMargins(14, 14, 14, 14);
-    auto *sessionsLabel = new QLabel(tr("Active Sessions"), sessionsCard);
-    sessionsLabel->setObjectName("mutedText");
-    m_sessionsValue = new QLabel(tr("0"), sessionsCard);
-    m_sessionsValue->setObjectName("statValue");
-    sessionsLayout->addWidget(sessionsLabel);
-    sessionsLayout->addWidget(m_sessionsValue);
-
-    auto *throughputCard = new QFrame(proxyCard);
-    throughputCard->setObjectName("summaryCard");
-    auto *throughputLayout = new QVBoxLayout(throughputCard);
-    throughputLayout->setContentsMargins(14, 14, 14, 14);
-    auto *throughputLabel = new QLabel(tr("Throughput"), throughputCard);
-    throughputLabel->setObjectName("mutedText");
-    m_throughputValue = new QLabel(tr("0 B/sn"), throughputCard);
-    m_throughputValue->setObjectName("statValue");
-    throughputLayout->addWidget(throughputLabel);
-    throughputLayout->addWidget(m_throughputValue);
-
-    flowCard->setMinimumWidth(145);
-    healthCard->setMinimumWidth(145);
-    sessionsCard->setMinimumWidth(145);
-    throughputCard->setMinimumWidth(145);
-    statRow->addWidget(flowCard);
-    statRow->addWidget(healthCard);
-    statRow->addWidget(sessionsCard);
-    statRow->addWidget(throughputCard);
-    statHost->setLayout(statRow);
-
-    auto *detailsCard = new QFrame(proxyCard);
-    detailsCard->setObjectName("summaryCard");
-    auto *detailsLayout = new QGridLayout(detailsCard);
-    detailsLayout->setContentsMargins(14, 14, 14, 14);
-    detailsLayout->setHorizontalSpacing(12);
-    detailsLayout->setVerticalSpacing(8);
-    auto *targetLabel = new QLabel(tr("Target"), detailsCard);
-    targetLabel->setObjectName("mutedText");
-    m_targetValue = new QLabel(tr("127.0.0.1:8080 -> 127.0.0.1:18081"), detailsCard);
-    m_targetValue->setObjectName("cardTitle");
-    auto *tlsLabel = new QLabel(tr("TLS"), detailsCard);
-    tlsLabel->setObjectName("mutedText");
-    m_tlsValue = new QLabel(tr("Intercept Ready"), detailsCard);
-    m_tlsValue->setObjectName("cardTitle");
-    detailsLayout->addWidget(targetLabel, 0, 0);
-    detailsLayout->addWidget(m_targetValue, 0, 1);
-    detailsLayout->addWidget(tlsLabel, 1, 0);
-    detailsLayout->addWidget(m_tlsValue, 1, 1);
-
-    auto *quickCard = new QFrame(proxyCard);
-    quickCard->setObjectName("summaryCard");
-    auto *quickLayout = new QGridLayout(quickCard);
-    quickLayout->setContentsMargins(14, 14, 14, 14);
-    quickLayout->setHorizontalSpacing(10);
-    quickLayout->setVerticalSpacing(8);
-
-    auto addQuickField = [quickCard, quickLayout](int row, const QString &labelText, QWidget *field) {
-        auto *label = new QLabel(labelText, quickCard);
-        label->setObjectName("mutedText");
-        quickLayout->addWidget(label, row, 0);
-        quickLayout->addWidget(field, row, 1);
-    };
-
-    m_listenHostEdit = new QLineEdit(quickCard);
-    m_listenPortSpin = new QSpinBox(quickCard);
-    m_listenPortSpin->setRange(1, 65535);
-    m_targetHostEdit = new QLineEdit(quickCard);
-    m_targetPortSpin = new QSpinBox(quickCard);
-    m_targetPortSpin->setRange(1, 65535);
-    m_idleTimeoutSpin = new QSpinBox(quickCard);
-    m_idleTimeoutSpin->setRange(5, 300);
-    m_idleTimeoutSpin->setSuffix(tr(" sn"));
-    m_workerSpin = new QSpinBox(quickCard);
-    m_workerSpin->setRange(1, 16);
-    m_sharedSecretEdit = new QLineEdit(quickCard);
-    m_requireHandshakeCheck = new QCheckBox(tr("Handshake zorunlu"), quickCard);
-    auto *applySettingsButton = new QPushButton(tr("Ayar Uygula"), quickCard);
-    applySettingsButton->setObjectName("bevelButton");
-
-    addQuickField(0, tr("Dinleme host"), m_listenHostEdit);
-    addQuickField(1, tr("Dinleme port"), m_listenPortSpin);
-    addQuickField(2, tr("Hedef host"), m_targetHostEdit);
-    addQuickField(3, tr("Hedef port"), m_targetPortSpin);
-    addQuickField(4, tr("Idle timeout"), m_idleTimeoutSpin);
-    addQuickField(5, tr("Worker"), m_workerSpin);
-    addQuickField(6, tr("Secret"), m_sharedSecretEdit);
-    quickLayout->addWidget(m_requireHandshakeCheck, 7, 1);
-    quickLayout->addWidget(applySettingsButton, 8, 1);
-
-    proxyLayout->addWidget(detailsCard);
-    proxyLayout->addWidget(quickCard);
-
-    auto *buttonHost = new QWidget(proxyCard);
-    auto *buttonRow = new FlowLayout(buttonHost, 0, 20, 12);
-
-    auto buildButtonStack = [proxyCard](const QString &ledLabel, const QString &buttonText, const QColor &ledColor, StatusLed **ledOut) {
-        auto *stack = new QVBoxLayout();
-        stack->setSpacing(8);
-        auto *top = new QHBoxLayout();
-        *ledOut = new StatusLed(ledColor, proxyCard);
-        auto *label = new QLabel(ledLabel, proxyCard);
-        label->setObjectName("mutedText");
-        top->addWidget(*ledOut);
-        top->addWidget(label);
-        top->addStretch();
-        auto *button = new TacticalActionButton(buttonText, proxyCard);
-        stack->addLayout(top);
-        stack->addWidget(button);
-        return qMakePair(stack, button);
-    };
-
-    QPushButton *startButton = nullptr;
-    QPushButton *stopButton = nullptr;
-    auto startStack = buildButtonStack(tr("Live"), tr("Start Proxy"), QColor("#22c55e"), &m_startLed);
-    auto stopStack = buildButtonStack(tr("Halt"), tr("Stop Proxy"), QColor("#ef4444"), &m_stopLed);
-    startButton = startStack.second;
-    stopButton = stopStack.second;
-    auto *startGroup = new QWidget(proxyCard);
-    startGroup->setLayout(startStack.first);
-    auto *stopGroup = new QWidget(proxyCard);
-    stopGroup->setLayout(stopStack.first);
-    buttonRow->addWidget(startGroup);
-    buttonRow->addWidget(stopGroup);
-    buttonHost->setLayout(buttonRow);
-
-    auto *handshake = new ServerHandshakeWidget(proxyCard);
-    m_meterWidget = new TrafficMeterWidget(proxyCard);
-    m_waterfallWidget = new TrafficWaterfallWidget(proxyCard);
-
-    proxyLayout->addWidget(proxyTitle);
-    proxyLayout->addWidget(proxyInfo);
-    proxyLayout->addWidget(statHost);
-    proxyLayout->addWidget(buttonHost);
-    auto *vizRow = new QHBoxLayout();
-    vizRow->setSpacing(12);
-    vizRow->addWidget(handshake, 0, Qt::AlignLeft);
-    vizRow->addWidget(m_meterWidget, 1);
-    vizRow->addWidget(m_waterfallWidget, 2);
-    proxyLayout->addLayout(vizRow);
+    m_flowValue = proxyCard->flowValue();
+    m_healthValue = proxyCard->healthValue();
+    m_sessionsValue = proxyCard->sessionsValue();
+    m_throughputValue = proxyCard->throughputValue();
+    m_targetValue = proxyCard->targetValue();
+    m_tlsValue = proxyCard->tlsValue();
+    m_listenHostEdit = proxyCard->listenHostEdit();
+    m_listenPortSpin = proxyCard->listenPortSpin();
+    m_targetHostEdit = proxyCard->targetHostEdit();
+    m_targetPortSpin = proxyCard->targetPortSpin();
+    m_idleTimeoutSpin = proxyCard->idleTimeoutSpin();
+    m_workerSpin = proxyCard->workerSpin();
+    m_sharedSecretEdit = proxyCard->sharedSecretEdit();
+    m_requireHandshakeCheck = proxyCard->requireHandshakeCheck();
+    m_startLed = proxyCard->startLed();
+    m_stopLed = proxyCard->stopLed();
+    m_meterWidget = proxyCard->meterWidget();
+    m_waterfallWidget = proxyCard->waterfallWidget();
+    QPushButton *startButton = proxyCard->startButton();
+    QPushButton *stopButton = proxyCard->stopButton();
+    QPushButton *applySettingsButton = proxyCard->applySettingsButton();
 
     topRow->addWidget(focusCard, 3);
     topRow->addWidget(proxyCard, 4);
 
-    auto *bottomTabsCard = new QFrame(this);
-    bottomTabsCard->setObjectName("cardPanel");
-    auto *bottomTabsLayout = new QVBoxLayout(bottomTabsCard);
-    bottomTabsLayout->setContentsMargins(20, 20, 20, 20);
-    bottomTabsLayout->setSpacing(12);
-
-    auto *bottomTabs = new QTabWidget(bottomTabsCard);
-    bottomTabs->setDocumentMode(true);
-    bottomTabs->setUsesScrollButtons(true);
-
-    auto *feedTab = new QWidget(bottomTabs);
-    auto *feedLayout = new QVBoxLayout(feedTab);
-    feedLayout->setContentsMargins(6, 8, 6, 6);
-    feedLayout->setSpacing(10);
-    auto *feedTitle = new QLabel(tr("Tactical Feed"), feedTab);
-    feedTitle->setObjectName("sectionTitle");
-    auto *feedInfo = new QLabel(tr("Proxy oturumu boyunca servis olaylari, kontrol degisimleri ve kullanici aksiyonlari burada akar."), feedTab);
-    feedInfo->setObjectName("mutedText");
-    feedInfo->setWordWrap(true);
-    m_eventFeed = new QListWidget(feedTab);
-    m_eventFeed->setAlternatingRowColors(true);
-    m_eventFeed->setSelectionMode(QAbstractItemView::NoSelection);
-    m_eventFeed->setMinimumHeight(180);
-    feedLayout->addWidget(feedTitle);
-    feedLayout->addWidget(feedInfo);
-    feedLayout->addWidget(m_eventFeed);
-
-    auto *waterfallTab = new QWidget(bottomTabs);
-    auto *waterfallLayout = new QVBoxLayout(waterfallTab);
-    waterfallLayout->setContentsMargins(6, 8, 6, 6);
-    waterfallLayout->setSpacing(12);
-    auto *waterfallTitle = new QLabel(tr("Traffic Waterfall"), waterfallTab);
-    waterfallTitle->setObjectName("sectionTitle");
-    auto *waterfallInfo = new QLabel(tr("Anlik trafik yogunlugu zaman ekseninde akar. Dusuk akista soguk tonlar, spike aninda sicak tonlar gorunur."), waterfallTab);
-    waterfallInfo->setObjectName("mutedText");
-    waterfallInfo->setWordWrap(true);
-    m_waterfallDetailWidget = new TrafficWaterfallWidget(waterfallTab);
-    m_waterfallDetailWidget->setMinimumHeight(240);
-    auto *legendRow = new QHBoxLayout();
-    legendRow->setSpacing(10);
-    auto addLegend = [waterfallTab, legendRow](const QString &labelText, const QColor &color) {
-        auto *chip = new QLabel(labelText, waterfallTab);
-        chip->setStyleSheet(QString("QLabel { background:%1; color:#f8fafc; border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:4px 10px; }")
-                                .arg(color.name()));
-        legendRow->addWidget(chip);
-    };
-    addLegend(tr("Dusuk"), QColor("#18687a"));
-    addLegend(tr("Orta"), QColor("#2ab06c"));
-    addLegend(tr("Yuksek"), QColor("#ecb32f"));
-    addLegend(tr("Spike"), QColor("#dc2840"));
-    legendRow->addStretch();
-    waterfallLayout->addWidget(waterfallTitle);
-    waterfallLayout->addWidget(waterfallInfo);
-    waterfallLayout->addWidget(m_waterfallDetailWidget, 1);
-    waterfallLayout->addLayout(legendRow);
-
-    bottomTabs->addTab(feedTab, tr("Feed"));
-    bottomTabs->addTab(waterfallTab, tr("Waterfall"));
-    bottomTabsLayout->addWidget(bottomTabs);
+    auto *bottomTabsCard = new ProxyBottomPanel(this);
+    m_eventFeed = bottomTabsCard->eventFeed();
+    m_waterfallDetailWidget = bottomTabsCard->waterfallDetailWidget();
 
     layout->addLayout(topRow);
     layout->addWidget(bottomTabsCard);

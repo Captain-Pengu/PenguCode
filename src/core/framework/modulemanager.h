@@ -32,6 +32,8 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     void loadModules(SettingsManager *settings, Logger *logger);
+    QList<ModuleInterface *> modules() const;
+    ModuleInterface *moduleById(const QString &moduleId) const;
 
     ModuleInterface *activeModule() const;
 

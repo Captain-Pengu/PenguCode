@@ -85,10 +85,13 @@ qt_add_executable(PenguFoce
     src/modules/recon/engine/dnsreconmodule.cpp
     src/modules/recon/engine/osintandleakmodule.cpp
     src/modules/recon/engine/pengufoce_masterscanner.cpp
+    src/modules/recon/engine/reconreportbuilder.cpp
     src/modules/recon/engine/vulnmatchermodule.cpp
     src/modules/spider/engine/cdpclient.cpp
+    src/modules/spider/engine/spiderhostinsights.cpp
     src/modules/spider/engine/htmlextractor.cpp
     src/modules/spider/engine/spidercore.cpp
+    src/modules/spider/engine/spiderreportbuilder.cpp
     src/modules/spider/engine/spiderscope.cpp
     src/modules/spider/engine/spiderworkflow.cpp
     src/ui/layout/flowlayout.cpp
@@ -98,11 +101,28 @@ qt_add_executable(PenguFoce
     src/ui/panels/controlcenter/settingslogwidget.cpp
     src/ui/views/portscanner/portscannerwidget.cpp
     src/ui/views/proxy/proxywidget.cpp
+    src/ui/views/proxy/proxyruntimepanel.cpp
+    src/ui/views/proxy/proxybottompanel.cpp
     src/ui/views/recon/reconwidget.cpp
+    src/ui/views/recon/reconsummarypanel.cpp
+    src/ui/views/recon/reconcontrolpanel.cpp
+    src/ui/views/recon/reconlivepanel.cpp
+    src/ui/views/recon/reconfindingspanel.cpp
+    src/ui/views/recon/reconevidencepanel.cpp
+    src/ui/views/recon/reconreportpanel.cpp
     src/ui/shell/settingsdialog.cpp
     src/ui/views/spider/spiderwidget.cpp
+    src/ui/views/spider/spiderhosthealthpanel.cpp
+    src/ui/views/spider/spidersetuppanel.cpp
+    src/ui/views/spider/spiderresultspanel.cpp
     src/ui/views/pengucore/pengucorewidget.cpp
-)
+    src/ui/views/pengucore/pengucoresessionpanel.cpp
+    src/ui/views/pengucore/pengucorefilterpanel.cpp
+    src/ui/views/pengucore/pengucorebrowserpanel.cpp
+    src/ui/views/pengucore/pengucoreinspectorpanel.cpp
+    src/ui/views/pengucore/pengucorecontrolpanel.cpp
+    src/ui/widgets/reportpreviewdialog.cpp
+  )
 
 qt_add_resources(PenguFoce "pengufoce_ui_shell_qml"
     PREFIX "/"
@@ -294,6 +314,25 @@ add_test(
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+add_executable(pengufoce_spider_host_insights_tests
+    tests/spider_host_insights_tests.cpp
+    src/modules/spider/engine/spiderhostinsights.cpp
+)
+
+target_include_directories(pengufoce_spider_host_insights_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pengufoce_spider_host_insights_tests PRIVATE
+    Qt6::Core
+)
+
+add_test(
+    NAME pengufoce_spider_host_insights_tests
+    COMMAND pengufoce_spider_host_insights_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 add_executable(pengufoce_spider_core_tests
     tests/spider_core_tests.cpp
     src/modules/spider/engine/cdpclient.cpp
@@ -325,5 +364,31 @@ endif()
 add_test(
     NAME pengufoce_spider_core_tests
     COMMAND pengufoce_spider_core_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_executable(pengufoce_core_state_tests
+    tests/core_state_tests.cpp
+    src/core/framework/moduleinterface.cpp
+    src/core/framework/modulemanager.cpp
+    src/core/framework/moduleregistry.cpp
+    src/core/settings/settingsmanager.cpp
+    src/controllers/app/sessionmanager.cpp
+    src/core/logging/logger.cpp
+    src/core/logging/logmodel.cpp
+    src/core/theme/themeengine.cpp
+)
+
+target_include_directories(pengufoce_core_state_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pengufoce_core_state_tests PRIVATE
+    Qt6::Core
+)
+
+add_test(
+    NAME pengufoce_core_state_tests
+    COMMAND pengufoce_core_state_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )

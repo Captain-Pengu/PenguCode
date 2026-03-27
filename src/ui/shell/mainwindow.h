@@ -32,6 +32,7 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void handleModuleSelectionChanged(int row);
@@ -48,11 +49,14 @@ private:
     QString buildStyleSheet() const;
     void setActiveModuleIndex(int row);
     void animateCurrentPage();
+    void updateResponsiveShell();
 
     AppController *m_controller;
     ModuleManager *m_moduleManager;
     LogModel *m_logModel;
     QWidget *m_mainContentWidget = nullptr;
+    QWidget *m_contentRail = nullptr;
+    QScrollArea *m_mainScrollArea = nullptr;
     QStackedWidget *m_contentStack = nullptr;
     QPlainTextEdit *m_logConsole = nullptr;
     QLabel *m_headerTitle = nullptr;

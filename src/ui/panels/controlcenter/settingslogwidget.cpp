@@ -15,6 +15,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -105,6 +106,36 @@ void SettingsLogWidget::reloadThemeInfo()
     m_themeModeValue->setText(themeKey == QLatin1String("light") ? tr("Acik tema aktif") : tr("Koyu tema aktif"));
     m_presetHintValue->setText(tr("Aktif tema ailesi: %1").arg(spacedPreset));
     m_logCountValue->setText(QString::number(m_logModel ? m_logModel->rowCount() : 0));
+    if (m_diagList && m_logModel) {
+        int errorCount = 0;
+        int warnCount = 0;
+        int infoCount = 0;
+        m_diagList->clear();
+        for (int row = 0; row < m_logModel->rowCount(); ++row) {
+            const QModelIndex index = m_logModel->index(row, 0);
+            const QString level = m_logModel->data(index, LogModel::LevelRole).toString();
+            const QString formatted = m_logModel->data(index, LogModel::FormattedRole).toString();
+            if (level == QLatin1String("ERROR")) {
+                ++errorCount;
+            } else if (level == QLatin1String("WARN")) {
+                ++warnCount;
+            } else {
+                ++infoCount;
+            }
+            if ((level == QLatin1String("ERROR") || level == QLatin1String("WARN")) && m_diagList->count() < 50) {
+                m_diagList->addItem(formatted);
+            }
+        }
+        if (m_diagErrorValue) {
+            m_diagErrorValue->setText(QString::number(errorCount));
+        }
+        if (m_diagWarnValue) {
+            m_diagWarnValue->setText(QString::number(warnCount));
+        }
+        if (m_diagInfoValue) {
+            m_diagInfoValue->setText(QString::number(infoCount));
+        }
+    }
 }
 
 void SettingsLogWidget::appendLogLine(const QString &line)
@@ -527,10 +558,29 @@ void SettingsLogWidget::buildUi()
     logCardLayout->addWidget(m_logConsole, 1);
     logsLayout->addWidget(logCard);
 
+    auto *diagnosticsPage = new QWidget(this);
+    auto *diagnosticsLayout = new QVBoxLayout(diagnosticsPage);
+    diagnosticsLayout->setContentsMargins(0, 0, 0, 0);
+    diagnosticsLayout->setSpacing(16);
+    auto *diagnosticsCard = makeSectionCard(diagnosticsPage, tr("Diagnostics"), tr("Warning ve error agirlikli sistem tanilama akisi."));
+    auto *diagnosticsCardLayout = qobject_cast<QVBoxLayout *>(diagnosticsCard->layout());
+    auto *diagSummaryHost = new QWidget(diagnosticsCard);
+    auto *diagSummary = new FlowLayout(diagSummaryHost, 0, 10, 10);
+    diagSummary->addWidget(makeInfoCard(diagnosticsCard, tr("Error"), &m_diagErrorValue));
+    diagSummary->addWidget(makeInfoCard(diagnosticsCard, tr("Warning"), &m_diagWarnValue));
+    diagSummary->addWidget(makeInfoCard(diagnosticsCard, tr("Info"), &m_diagInfoValue));
+    diagSummaryHost->setLayout(diagSummary);
+    m_diagList = new QListWidget(diagnosticsCard);
+    m_diagList->setAlternatingRowColors(true);
+    diagnosticsCardLayout->addWidget(diagSummaryHost);
+    diagnosticsCardLayout->addWidget(m_diagList, 1);
+    diagnosticsLayout->addWidget(diagnosticsCard);
+
     tabs->addTab(themePage, tr("Tema"));
     tabs->addTab(opsPage, tr("Moduller"));
     tabs->addTab(spiderPage, tr("Spider"));
     tabs->addTab(logsPage, tr("Gunlukler"));
+    tabs->addTab(diagnosticsPage, tr("Diagnostics"));
 
     root->addWidget(hero);
     root->addWidget(tabs, 1);

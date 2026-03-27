@@ -17,6 +17,8 @@ AppController::AppController(QObject *parent)
 {
     m_themeEngine->loadSettings(m_settingsManager);
     m_moduleManager->loadModules(m_settingsManager, m_logger);
+    m_sessionManager->setThemeEngine(m_themeEngine);
+    m_sessionManager->setSettingsManager(m_settingsManager);
     m_scanOrchestrator->setLogger(m_logger);
 }
 

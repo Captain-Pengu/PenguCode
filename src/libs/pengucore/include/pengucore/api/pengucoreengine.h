@@ -60,10 +60,15 @@ signals:
 
 private:
     bool loadCaptureSession(const QString &filePath);
-    PacketRecord makeRecordFromRawFrame(const RawFrame &frame) const;
+    QVector<RawFrame> ingestFrames(const QVector<RawFrame> &frames) const;
+    QVector<PacketRecord> parseFrames(const QVector<RawFrame> &frames) const;
+    void classifyPackets(QVector<PacketRecord> &packets) const;
     void appendLiveFrame(const RawFrame &frame);
     void flushPendingLiveFrames();
     void rebuildFlows();
+    void updateFlowState();
+    void emitSessionState(const QString &message, bool reset = false);
+    void stressSafeShutdownLiveCapture();
 
     QVector<PacketRecord> m_packets;
     QVector<FlowStats> m_flows;
@@ -88,6 +93,7 @@ private:
     LiveCaptureEngine *m_liveCapture = nullptr;
     PcapFileWriter *m_liveCaptureWriter = nullptr;
     QTimer *m_liveFlushTimer = nullptr;
+    bool m_liveStopRequested = false;
 };
 
 } // namespace pengufoce::pengucore

@@ -21,6 +21,10 @@ public:
 
     void initialize(SettingsManager *settings, Logger *logger) override;
     QVariantMap defaultSettings() const override;
+    QVariantMap saveState() const override;
+    bool loadState(const QVariantMap &state) override;
+    void reset() override;
+    QString healthStatus() const override;
 
     pengufoce::pengucore::PenguCoreEngine *engine();
 

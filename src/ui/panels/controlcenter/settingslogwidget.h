@@ -11,6 +11,7 @@ class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
 class QLineEdit;
+class QListWidget;
 
 class SettingsLogWidget : public QWidget
 {
@@ -38,7 +39,11 @@ private:
     QLabel *m_themeModeValue = nullptr;
     QLabel *m_presetHintValue = nullptr;
     QLabel *m_logCountValue = nullptr;
+    QLabel *m_diagErrorValue = nullptr;
+    QLabel *m_diagWarnValue = nullptr;
+    QLabel *m_diagInfoValue = nullptr;
     QPlainTextEdit *m_logConsole = nullptr;
+    QListWidget *m_diagList = nullptr;
     QPushButton *m_openSettingsButton = nullptr;
     QComboBox *m_themeModeCombo = nullptr;
     QComboBox *m_themePresetCombo = nullptr;

@@ -18,6 +18,7 @@ class QDialog;
 class QTextEdit;
 class QWidget;
 class QTimer;
+class ReportPreviewDialog;
 
 class ReconWidget : public QWidget
 {
@@ -141,8 +142,7 @@ private:
     QVariantMap m_lastReportVariant;
     QVariantMap m_compareBaselineVariant;
     QVariantMap m_findingNotes;
-    QDialog *m_reportPreviewDialog = nullptr;
-    QTextEdit *m_reportPreviewView = nullptr;
+    ReportPreviewDialog *m_reportPreviewDialog = nullptr;
     QElapsedTimer *m_scanTimer = nullptr;
     QTimer *m_spiderRefreshTimer = nullptr;
 };

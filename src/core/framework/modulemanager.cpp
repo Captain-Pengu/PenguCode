@@ -64,6 +64,7 @@ void ModuleManager::loadModules(SettingsManager *settings, Logger *logger)
 
     for (const auto &factory : ModuleRegistry::instance().factories()) {
         auto module = factory.creator();
+        module->bindContext(settings, logger);
         settings->ensureModuleDefaults(factory.id, module->defaultSettings());
         module->initialize(settings, logger);
         m_modules.push_back(std::move(module));
@@ -82,6 +83,26 @@ void ModuleManager::loadModules(SettingsManager *settings, Logger *logger)
 ModuleInterface *ModuleManager::activeModule() const
 {
     return m_activeModule;
+}
+
+QList<ModuleInterface *> ModuleManager::modules() const
+{
+    QList<ModuleInterface *> result;
+    result.reserve(rowCount());
+    for (const auto &module : m_modules) {
+        result.push_back(module.get());
+    }
+    return result;
+}
+
+ModuleInterface *ModuleManager::moduleById(const QString &moduleId) const
+{
+    for (const auto &module : m_modules) {
+        if (module->id() == moduleId) {
+            return module.get();
+        }
+    }
+    return nullptr;
 }
 
 void ModuleManager::setActiveIndex(int index)

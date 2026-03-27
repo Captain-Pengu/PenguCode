@@ -56,6 +56,37 @@ QVariantMap ReconModule::defaultSettings() const
     };
 }
 
+QVariantMap ReconModule::saveState() const
+{
+    return {
+        {"defaultTarget", m_settings ? m_settings->value("modules/recon", "defaultTarget", QString()).toString() : QString()},
+        {"defaultEndpoint", m_settings ? m_settings->value("modules/recon", "defaultEndpoint", QString()).toString() : QString()}
+    };
+}
+
+bool ReconModule::loadState(const QVariantMap &state)
+{
+    if (!m_settings) {
+        return false;
+    }
+    m_settings->setValue("modules/recon", "defaultTarget", state.value("defaultTarget").toString());
+    m_settings->setValue("modules/recon", "defaultEndpoint", state.value("defaultEndpoint").toString());
+    reloadSettings();
+    return true;
+}
+
+void ReconModule::reset()
+{
+    if (m_masterScanner) {
+        m_masterScanner->stop();
+    }
+}
+
+QString ReconModule::healthStatus() const
+{
+    return QStringLiteral("HEALTHY");
+}
+
 PenguFoceMasterScanner *ReconModule::masterScanner() const
 {
     return m_masterScanner;

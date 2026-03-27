@@ -1,8 +1,14 @@
 #include "pengucorewidget.h"
 
+#include "pengucore/api/pengucoresessionreportservice.h"
 #include "modules/pengucore/pengucoremodule.h"
 #include "ui/layout/flowlayout.h"
 #include "ui/layout/workspacecontainers.h"
+#include "ui/views/pengucore/pengucorebrowserpanel.h"
+#include "ui/views/pengucore/pengucorecontrolpanel.h"
+#include "ui/views/pengucore/pengucorefilterpanel.h"
+#include "ui/views/pengucore/pengucoreinspectorpanel.h"
+#include "ui/views/pengucore/pengucoresessionpanel.h"
 
 #include <QClipboard>
 #include <QComboBox>
@@ -80,44 +86,6 @@ QByteArray extractPacketPayload(const PacketRecord &packet)
     }
 
     return {};
-}
-
-QJsonObject packetToJsonObject(const PacketRecord &packet)
-{
-    QJsonObject root;
-    root.insert(QStringLiteral("frame_number"), packet.rawFrame.frameNumber);
-    root.insert(QStringLiteral("timestamp_utc"), packet.rawFrame.timestampUtc.toString(Qt::ISODateWithMs));
-    root.insert(QStringLiteral("captured_length"), packet.rawFrame.capturedLength);
-    root.insert(QStringLiteral("original_length"), packet.rawFrame.originalLength);
-    root.insert(QStringLiteral("source_endpoint"), packet.sourceEndpoint);
-    root.insert(QStringLiteral("destination_endpoint"), packet.destinationEndpoint);
-    root.insert(QStringLiteral("summary"), packet.summary);
-    root.insert(QStringLiteral("raw_hex"), QString::fromLatin1(packet.rawFrame.bytes.toHex()));
-
-    QJsonArray warningsArray;
-    for (const QString &warning : packet.warnings) {
-        warningsArray.append(warning);
-    }
-    root.insert(QStringLiteral("warnings"), warningsArray);
-
-    QJsonArray layersArray;
-    for (const ProtocolLayer &layer : packet.layers) {
-        QJsonObject layerObject;
-        layerObject.insert(QStringLiteral("name"), layer.name);
-        QJsonArray fieldsArray;
-        for (const auto &field : layer.fields) {
-            QJsonObject fieldObject;
-            fieldObject.insert(QStringLiteral("name"), field.name);
-            fieldObject.insert(QStringLiteral("value"), field.value);
-            fieldObject.insert(QStringLiteral("offset"), field.offset);
-            fieldObject.insert(QStringLiteral("length"), field.length);
-            fieldsArray.append(fieldObject);
-        }
-        layerObject.insert(QStringLiteral("fields"), fieldsArray);
-        layersArray.append(layerObject);
-    }
-    root.insert(QStringLiteral("layers"), layersArray);
-    return root;
 }
 
 quint32 extractTcpSequenceNumber(const PacketRecord &packet)
@@ -518,34 +486,17 @@ void PenguCoreWidget::buildUi()
     m_sessionInfoValue->setObjectName("mutedText");
     m_sessionInfoValue->setWordWrap(true);
 
-    auto *actionHost = new QWidget(m_heroPanel);
-    auto *actionRow = new FlowLayout(actionHost, 0, 10, 10);
-    m_clearButton = new QPushButton(tr("Oturumu Temizle"), m_heroPanel);
-    m_exportButton = new QPushButton(tr("JSON Disa Aktar"), m_heroPanel);
-    m_exportLiveReportButton = new QPushButton(tr("Live Rapor"), m_heroPanel);
-    m_openLiveFolderButton = new QPushButton(tr("Live Klasorunu Ac"), m_heroPanel);
-    m_refreshAdaptersButton = new QPushButton(tr("Adapterleri Yenile"), m_heroPanel);
-    m_liveAdapterCombo = new QComboBox(m_heroPanel);
-    m_liveFilterEdit = new QLineEdit(m_heroPanel);
-    m_liveFilterEdit->setPlaceholderText(tr("Capture filter (ornek: tcp port 80)"));
-    m_liveSaveFormatCombo = new QComboBox(m_heroPanel);
-    m_liveSaveFormatCombo->addItem(QStringLiteral("PCAP"), QStringLiteral("pcap"));
-    m_liveSaveFormatCombo->addItem(QStringLiteral("PCAPNG"), QStringLiteral("pcapng"));
-    m_startLiveButton = new QPushButton(tr("Canli Baslat"), m_heroPanel);
-    m_stopLiveButton = new QPushButton(tr("Canli Durdur"), m_heroPanel);
-    m_liveAdapterCombo->setMinimumWidth(260);
-    m_liveFilterEdit->setMinimumWidth(260);
-    actionRow->addWidget(m_clearButton);
-    actionRow->addWidget(m_exportButton);
-    actionRow->addWidget(m_exportLiveReportButton);
-    actionRow->addWidget(m_openLiveFolderButton);
-    actionRow->addWidget(m_refreshAdaptersButton);
-    actionRow->addWidget(m_liveAdapterCombo);
-    actionRow->addWidget(m_liveFilterEdit);
-    actionRow->addWidget(m_liveSaveFormatCombo);
-    actionRow->addWidget(m_startLiveButton);
-    actionRow->addWidget(m_stopLiveButton);
-    actionHost->setLayout(actionRow);
+    auto *actionHost = new PenguCoreControlPanel(m_viewerOnly, m_heroPanel);
+    m_clearButton = actionHost->clearButton();
+    m_exportButton = actionHost->exportButton();
+    m_exportLiveReportButton = actionHost->exportLiveReportButton();
+    m_openLiveFolderButton = actionHost->openLiveFolderButton();
+    m_refreshAdaptersButton = actionHost->refreshAdaptersButton();
+    m_liveAdapterCombo = actionHost->liveAdapterCombo();
+    m_liveFilterEdit = actionHost->liveFilterEdit();
+    m_liveSaveFormatCombo = actionHost->liveSaveFormatCombo();
+    m_startLiveButton = actionHost->startLiveButton();
+    m_stopLiveButton = actionHost->stopLiveButton();
 
     connect(m_clearButton, &QPushButton::clicked, this, [this]() {
         if (m_module && m_module->engine()) {
@@ -581,36 +532,6 @@ void PenguCoreWidget::buildUi()
         }
     });
 
-    if (m_viewerOnly) {
-        if (m_refreshAdaptersButton) {
-            m_refreshAdaptersButton->hide();
-        }
-        if (m_liveAdapterCombo) {
-            m_liveAdapterCombo->hide();
-        }
-        if (m_liveFilterEdit) {
-            m_liveFilterEdit->hide();
-        }
-        if (m_liveSaveFormatCombo) {
-            m_liveSaveFormatCombo->hide();
-        }
-        if (m_startLiveButton) {
-            m_startLiveButton->hide();
-        }
-        if (m_stopLiveButton) {
-            m_stopLiveButton->hide();
-        }
-        if (m_openLiveFolderButton) {
-            m_openLiveFolderButton->hide();
-        }
-        if (m_exportLiveReportButton) {
-            m_exportLiveReportButton->hide();
-        }
-        if (m_clearButton) {
-            m_clearButton->setText(tr("Gorunumu Temizle"));
-        }
-    }
-
     heroLayout->addWidget(title);
     heroLayout->addWidget(lead);
     heroLayout->addWidget(m_statusValue);
@@ -619,154 +540,38 @@ void PenguCoreWidget::buildUi()
     heroLayout->addWidget(m_sessionInfoValue);
     heroLayout->addWidget(actionHost);
 
-    auto *statsHost = new QWidget(m_heroPanel);
-    auto *statsRow = new FlowLayout(statsHost, 0, 10, 10);
-    const auto addStatCard = [&](const QString &labelText, QLabel **valueLabel) {
-        auto *card = new QFrame(m_heroPanel);
-        card->setObjectName("summaryCard");
-        auto *layout = new QVBoxLayout(card);
-        layout->setContentsMargins(14, 12, 14, 12);
-        layout->setSpacing(4);
-        auto *label = new QLabel(labelText, card);
-        label->setObjectName("summaryKicker");
-        *valueLabel = new QLabel(QStringLiteral("0"), card);
-        (*valueLabel)->setObjectName("statValue");
-        layout->addWidget(label);
-        layout->addWidget(*valueLabel);
-        card->setMinimumWidth(140);
-        statsRow->addWidget(card);
-    };
+    auto *sessionPanel = new PenguCoreSessionPanel(m_heroPanel);
+    m_totalPacketsValue = sessionPanel->totalPacketsValue();
+    m_visiblePacketsValue = sessionPanel->visiblePacketsValue();
+    m_totalFlowsValue = sessionPanel->totalFlowsValue();
+    m_visibleFlowsValue = sessionPanel->visibleFlowsValue();
+    m_sessionFileCardValue = sessionPanel->sessionFileCardValue();
+    m_sessionFormatCardValue = sessionPanel->sessionFormatCardValue();
+    m_sessionBytesCardValue = sessionPanel->sessionBytesCardValue();
+    m_sessionOpenedCardValue = sessionPanel->sessionOpenedCardValue();
+    m_sessionFirstSeenCardValue = sessionPanel->sessionFirstSeenCardValue();
+    m_sessionLastSeenCardValue = sessionPanel->sessionLastSeenCardValue();
+    m_sessionLiveSaveCardValue = sessionPanel->sessionLiveSaveCardValue();
+    m_timelineValue = sessionPanel->timelineValue();
+    m_timelineCard = sessionPanel;
+    heroLayout->addWidget(sessionPanel);
 
-    addStatCard(tr("Toplam Packet"), &m_totalPacketsValue);
-    addStatCard(tr("Gorunen Packet"), &m_visiblePacketsValue);
-    addStatCard(tr("Toplam Flow"), &m_totalFlowsValue);
-    addStatCard(tr("Gorunen Flow"), &m_visibleFlowsValue);
-    statsHost->setLayout(statsRow);
-    heroLayout->addWidget(statsHost);
-
-    auto *sessionHost = new QWidget(m_heroPanel);
-    auto *sessionRow = new FlowLayout(sessionHost, 0, 10, 10);
-    const auto addSessionCard = [&](const QString &labelText, QLabel **valueLabel) {
-        auto *card = new QFrame(m_heroPanel);
-        card->setObjectName("summaryCard");
-        auto *layout = new QVBoxLayout(card);
-        layout->setContentsMargins(12, 10, 12, 10);
-        layout->setSpacing(4);
-        auto *label = new QLabel(labelText, card);
-        label->setObjectName("summaryKicker");
-        *valueLabel = new QLabel(QStringLiteral("--"), card);
-        (*valueLabel)->setObjectName("mutedText");
-        (*valueLabel)->setWordWrap(true);
-        layout->addWidget(label);
-        layout->addWidget(*valueLabel);
-        card->setMinimumWidth(150);
-        sessionRow->addWidget(card);
-    };
-
-    addSessionCard(tr("Dosya"), &m_sessionFileCardValue);
-    addSessionCard(tr("Format"), &m_sessionFormatCardValue);
-    addSessionCard(tr("Toplam Byte"), &m_sessionBytesCardValue);
-    addSessionCard(tr("Yuklendi"), &m_sessionOpenedCardValue);
-    addSessionCard(tr("Ilk Packet"), &m_sessionFirstSeenCardValue);
-    addSessionCard(tr("Son Packet"), &m_sessionLastSeenCardValue);
-    addSessionCard(tr("Live Save"), &m_sessionLiveSaveCardValue);
-    sessionHost->setLayout(sessionRow);
-    heroLayout->addWidget(sessionHost);
-
-    m_timelineCard = new QFrame(m_heroPanel);
-    m_timelineCard->setObjectName("cardPanel");
-    auto *timelineLayout = new QVBoxLayout(m_timelineCard);
-    timelineLayout->setContentsMargins(14, 12, 14, 12);
-    timelineLayout->setSpacing(6);
-    auto *timelineTitle = new QLabel(tr("Session Timeline"), m_timelineCard);
-    timelineTitle->setObjectName("sectionTitle");
-    m_timelineValue = new QLabel(tr("Henuz zaman ekseni olusmadi"), m_timelineCard);
-    m_timelineValue->setObjectName("mutedText");
-    m_timelineValue->setWordWrap(true);
-    timelineLayout->addWidget(timelineTitle);
-    timelineLayout->addWidget(m_timelineValue);
-    heroLayout->addWidget(m_timelineCard);
-
-    m_filterCard = new QFrame(this);
-    m_filterCard->setObjectName("cardPanel");
-    auto *filterLayout = new QVBoxLayout(m_filterCard);
-    filterLayout->setContentsMargins(18, 18, 18, 18);
-    filterLayout->setSpacing(10);
-
-    auto *filterTitle = new QLabel(tr("Filtreler"), m_filterCard);
-    filterTitle->setObjectName("sectionTitle");
-    auto *filterHost = new QWidget(m_filterCard);
-    auto *filterRow = new FlowLayout(filterHost, 0, 10, 10);
-
-    m_searchEdit = new QLineEdit(m_filterCard);
-    m_searchEdit->setPlaceholderText(tr("Serbest metin ara"));
-    m_sourceFilterEdit = new QLineEdit(m_filterCard);
-    m_sourceFilterEdit->setPlaceholderText(tr("Kaynak"));
-    m_destinationFilterEdit = new QLineEdit(m_filterCard);
-    m_destinationFilterEdit->setPlaceholderText(tr("Hedef"));
-    m_protocolFilter = new QComboBox(m_filterCard);
-    m_filterPresetCombo = new QComboBox(m_filterCard);
-    m_protocolFilter->addItems({
-        tr("Tum Protokoller"),
-        QStringLiteral("ARP"),
-        QStringLiteral("IPv4"),
-        QStringLiteral("TCP"),
-        QStringLiteral("UDP"),
-        QStringLiteral("ICMP"),
-        QStringLiteral("DNS"),
-        QStringLiteral("HTTP")
-    });
-    m_filterPresetCombo->addItem(tr("Hazir Preset"), QString());
-    m_filterPresetCombo->addItem(tr("Web Trafiği"), QStringLiteral("tcp port 80 or tcp port 443 or tcp port 8080"));
-    m_filterPresetCombo->addItem(tr("DNS Trafiği"), QStringLiteral("udp port 53"));
-    m_filterPresetCombo->addItem(tr("ICMP / Ping"), QStringLiteral("icmp"));
-    m_filterPresetCombo->addItem(tr("Localhost Hariç"), QStringLiteral("not host 127.0.0.1"));
-    m_filterPresetCombo->addItem(tr("Yalnız TCP"), QStringLiteral("tcp"));
-    m_filterPresetCombo->addItem(tr("Yalnız UDP"), QStringLiteral("udp"));
-
-    m_searchEdit->setMinimumWidth(220);
-    m_sourceFilterEdit->setMinimumWidth(150);
-    m_destinationFilterEdit->setMinimumWidth(150);
-    m_protocolFilter->setMinimumWidth(140);
-    m_filterPresetCombo->setMinimumWidth(150);
-    filterRow->addWidget(m_searchEdit);
-    filterRow->addWidget(m_sourceFilterEdit);
-    filterRow->addWidget(m_destinationFilterEdit);
-    filterRow->addWidget(m_protocolFilter);
-    filterRow->addWidget(m_filterPresetCombo);
-    filterHost->setLayout(filterRow);
-
-    filterLayout->addWidget(filterTitle);
-    filterLayout->addWidget(filterHost);
-
-    m_quickActionCard = new QFrame(this);
-    m_quickActionCard->setObjectName("cardPanel");
-    auto *quickActionLayout = new QVBoxLayout(m_quickActionCard);
-    quickActionLayout->setContentsMargins(18, 14, 18, 14);
-    quickActionLayout->setSpacing(10);
-    auto *quickActionTitle = new QLabel(tr("Quick Actions"), m_quickActionCard);
-    quickActionTitle->setObjectName("sectionTitle");
-    auto *quickActionHost = new QWidget(m_quickActionCard);
-    auto *quickActionRow = new FlowLayout(quickActionHost, 0, 8, 8);
-    m_toggleInspectorButton = new QPushButton(tr("Inspector"), m_quickActionCard);
-    m_toggleHexButton = new QPushButton(tr("Hex Panel"), m_quickActionCard);
-    m_toggleFlowDetailButton = new QPushButton(tr("Flow Detail"), m_quickActionCard);
-    m_pauseLiveUiButton = new QPushButton(tr("UI Pause"), m_quickActionCard);
-    m_autoScrollButton = new QPushButton(tr("Auto Scroll"), m_quickActionCard);
-    m_onlyWarningsButton = new QPushButton(tr("Only Warnings"), m_quickActionCard);
-    m_dnsFocusButton = new QPushButton(tr("Only DNS"), m_quickActionCard);
-    m_httpFocusButton = new QPushButton(tr("Only HTTP"), m_quickActionCard);
-    quickActionRow->addWidget(m_toggleInspectorButton);
-    quickActionRow->addWidget(m_toggleHexButton);
-    quickActionRow->addWidget(m_toggleFlowDetailButton);
-    quickActionRow->addWidget(m_pauseLiveUiButton);
-    quickActionRow->addWidget(m_autoScrollButton);
-    quickActionRow->addWidget(m_onlyWarningsButton);
-    quickActionRow->addWidget(m_dnsFocusButton);
-    quickActionRow->addWidget(m_httpFocusButton);
-    quickActionHost->setLayout(quickActionRow);
-    quickActionLayout->addWidget(quickActionTitle);
-    quickActionLayout->addWidget(quickActionHost);
+    auto *filterPanel = new PenguCoreFilterPanel(this);
+    m_filterCard = filterPanel->filterCard();
+    m_quickActionCard = filterPanel->quickActionCard();
+    m_searchEdit = filterPanel->searchEdit();
+    m_sourceFilterEdit = filterPanel->sourceFilterEdit();
+    m_destinationFilterEdit = filterPanel->destinationFilterEdit();
+    m_protocolFilter = filterPanel->protocolFilter();
+    m_filterPresetCombo = filterPanel->filterPresetCombo();
+    m_toggleInspectorButton = filterPanel->toggleInspectorButton();
+    m_toggleHexButton = filterPanel->toggleHexButton();
+    m_toggleFlowDetailButton = filterPanel->toggleFlowDetailButton();
+    m_pauseLiveUiButton = filterPanel->pauseLiveUiButton();
+    m_autoScrollButton = filterPanel->autoScrollButton();
+    m_onlyWarningsButton = filterPanel->onlyWarningsButton();
+    m_dnsFocusButton = filterPanel->dnsFocusButton();
+    m_httpFocusButton = filterPanel->httpFocusButton();
 
     m_emptyStateCard = new QFrame(this);
     m_emptyStateCard->setObjectName("cardPanel");
@@ -794,154 +599,49 @@ void PenguCoreWidget::buildUi()
     auto *leftWorkspaceLayout = new QVBoxLayout(leftWorkspace);
     leftWorkspaceLayout->setContentsMargins(0, 0, 0, 0);
     leftWorkspaceLayout->setSpacing(0);
-
-    m_leftWorkspaceSplitter = new QSplitter(Qt::Vertical, leftWorkspace);
-    m_leftWorkspaceSplitter->setChildrenCollapsible(false);
-    m_leftWorkspaceSplitter->setHandleWidth(10);
-    m_leftWorkspaceSplitter->setOpaqueResize(false);
-
-    m_packetCard = new QFrame(m_leftWorkspaceSplitter);
-    m_packetCard->setObjectName("cardPanel");
-    auto *packetLayout = new QVBoxLayout(m_packetCard);
-    packetLayout->setContentsMargins(18, 18, 18, 18);
-    packetLayout->setSpacing(10);
-    auto *packetTitle = new QLabel(tr("Packet Browser"), m_packetCard);
-    packetTitle->setObjectName("sectionTitle");
-    auto *packetLead = new QLabel(tr("Ana izleme alani. Filtreden gecen packet'lar burada listelenir."), m_packetCard);
-    packetLead->setObjectName("mutedText");
-    packetLead->setWordWrap(true);
-    auto *packetActionRow = new QHBoxLayout();
-    packetActionRow->setSpacing(8);
-    m_packetApplyFilterButton = new QPushButton(tr("Packet Filtresi"), m_packetCard);
-    m_packetCopySourceButton = new QPushButton(tr("Kaynagi Kopyala"), m_packetCard);
-    m_packetCopyDestinationButton = new QPushButton(tr("Hedefi Kopyala"), m_packetCard);
-    m_packetSaveRawButton = new QPushButton(tr("Raw Kaydet"), m_packetCard);
-    m_packetSaveRangeButton = new QPushButton(tr("Aralik Kaydet"), m_packetCard);
-    m_packetExportJsonButton = new QPushButton(tr("Packet JSON"), m_packetCard);
-    m_packetCopyFieldButton = new QPushButton(tr("Alani Kopyala"), m_packetCard);
-    m_packetExportFieldButton = new QPushButton(tr("Alani Kaydet"), m_packetCard);
-    packetActionRow->addWidget(m_packetApplyFilterButton);
-    packetActionRow->addWidget(m_packetCopySourceButton);
-    packetActionRow->addWidget(m_packetCopyDestinationButton);
-    packetActionRow->addWidget(m_packetSaveRawButton);
-    packetActionRow->addWidget(m_packetSaveRangeButton);
-    packetActionRow->addWidget(m_packetExportJsonButton);
-    packetActionRow->addWidget(m_packetCopyFieldButton);
-    packetActionRow->addWidget(m_packetExportFieldButton);
-    packetActionRow->addStretch();
-    m_packetList = new QListWidget(m_packetCard);
-    m_packetList->setAlternatingRowColors(true);
-    m_packetList->setContextMenuPolicy(Qt::CustomContextMenu);
-    packetLayout->addWidget(packetTitle);
-    packetLayout->addWidget(packetLead);
-    packetLayout->addLayout(packetActionRow);
-    packetLayout->addWidget(m_packetList, 1);
-
-    m_flowCard = new QFrame(m_leftWorkspaceSplitter);
-    m_flowCard->setObjectName("cardPanel");
-    auto *flowLayout = new QVBoxLayout(m_flowCard);
-    flowLayout->setContentsMargins(18, 18, 18, 18);
-    flowLayout->setSpacing(10);
-    auto *flowTitle = new QLabel(tr("Flow Intelligence"), m_flowCard);
-    flowTitle->setObjectName("sectionTitle");
-    auto *flowLead = new QLabel(tr("Ikincil analiz alani. Secili akisa gore baglam verir."), m_flowCard);
-    flowLead->setObjectName("mutedText");
-    flowLead->setWordWrap(true);
-    auto *flowActionHost = new QWidget(m_flowCard);
-    auto *flowActionRow = new FlowLayout(flowActionHost, 0, 8, 8);
-    m_flowApplyFilterButton = new QPushButton(tr("Flow Filtresi"), m_flowCard);
-    m_flowIsolateButton = new QPushButton(tr("Flow'u Izole Et"), m_flowCard);
-    m_clearFlowIsolationButton = new QPushButton(tr("Izolasyonu Temizle"), m_flowCard);
-    m_exportFlowsButton = new QPushButton(tr("Flow JSON"), m_flowCard);
-    m_exportFlowStreamButton = new QPushButton(tr("Stream Kaydet"), m_flowCard);
-    m_exportFlowHexButton = new QPushButton(tr("Hex Kaydet"), m_flowCard);
-    m_exportFlowPacketsButton = new QPushButton(tr("Flow CSV"), m_flowCard);
-    flowActionRow->addWidget(m_flowApplyFilterButton);
-    flowActionRow->addWidget(m_flowIsolateButton);
-    flowActionRow->addWidget(m_clearFlowIsolationButton);
-    flowActionRow->addWidget(m_exportFlowsButton);
-    flowActionRow->addWidget(m_exportFlowStreamButton);
-    flowActionRow->addWidget(m_exportFlowHexButton);
-    flowActionRow->addWidget(m_exportFlowPacketsButton);
-    flowActionHost->setLayout(flowActionRow);
-    m_flowList = new QListWidget(m_flowCard);
-    m_flowList->setAlternatingRowColors(true);
-    m_flowList->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_flowDetailView = new QPlainTextEdit(m_flowCard);
-    m_flowDetailView->setReadOnly(true);
-    flowLayout->addWidget(flowTitle);
-    flowLayout->addWidget(flowLead);
-    flowLayout->addWidget(flowActionHost);
-    flowLayout->addWidget(m_flowList, 1);
-    flowLayout->addWidget(m_flowDetailView, 1);
-
-    leftWorkspaceLayout->addWidget(m_leftWorkspaceSplitter, 1);
+    auto *browserPanel = new PenguCoreBrowserPanel(leftWorkspace);
+    m_packetList = browserPanel->packetList();
+    m_flowList = browserPanel->flowList();
+    m_flowDetailView = browserPanel->flowDetailView();
+    m_packetApplyFilterButton = browserPanel->packetApplyFilterButton();
+    m_packetCopySourceButton = browserPanel->packetCopySourceButton();
+    m_packetCopyDestinationButton = browserPanel->packetCopyDestinationButton();
+    m_packetSaveRawButton = browserPanel->packetSaveRawButton();
+    m_packetSaveRangeButton = browserPanel->packetSaveRangeButton();
+    m_packetExportJsonButton = browserPanel->packetExportJsonButton();
+    m_packetCopyFieldButton = browserPanel->packetCopyFieldButton();
+    m_packetExportFieldButton = browserPanel->packetExportFieldButton();
+    m_flowApplyFilterButton = browserPanel->flowApplyFilterButton();
+    m_flowIsolateButton = browserPanel->flowIsolateButton();
+    m_clearFlowIsolationButton = browserPanel->clearFlowIsolationButton();
+    m_exportFlowsButton = browserPanel->exportFlowsButton();
+    m_exportFlowStreamButton = browserPanel->exportFlowStreamButton();
+    m_exportFlowHexButton = browserPanel->exportFlowHexButton();
+    m_exportFlowPacketsButton = browserPanel->exportFlowPacketsButton();
+    leftWorkspaceLayout->addWidget(browserPanel, 1);
 
     m_rightWorkspace = new QFrame(m_workspaceSplitter);
     auto *rightWorkspaceLayout = new QVBoxLayout(m_rightWorkspace);
     rightWorkspaceLayout->setContentsMargins(0, 0, 0, 0);
     rightWorkspaceLayout->setSpacing(16);
-
-    m_selectionCard = new QFrame(m_rightWorkspace);
-    m_selectionCard->setObjectName("cardPanel");
-    auto *selectionLayout = new QVBoxLayout(m_selectionCard);
-    selectionLayout->setContentsMargins(18, 18, 18, 18);
-    selectionLayout->setSpacing(8);
-    auto *selectionTitle = new QLabel(tr("Inspector"), m_selectionCard);
-    selectionTitle->setObjectName("sectionTitle");
-    auto *selectionLead = new QLabel(tr("Derin inceleme alani. Yalniz secili kayda odaklanir."), m_selectionCard);
-    selectionLead->setObjectName("mutedText");
-    selectionLead->setWordWrap(true);
-    selectionLayout->addWidget(selectionTitle);
-    selectionLayout->addWidget(selectionLead);
-
-    m_detailCard = new QFrame(m_rightWorkspace);
-    m_detailCard->setObjectName("cardPanel");
-    auto *detailLayout = new QVBoxLayout(m_detailCard);
-    detailLayout->setContentsMargins(18, 18, 18, 18);
-    detailLayout->setSpacing(10);
-    auto *detailTitle = new QLabel(tr("Packet Detail"), m_detailCard);
-    detailTitle->setObjectName("sectionTitle");
-    auto *detailSearchHost = new QWidget(m_detailCard);
-    auto *detailSearchRow = new FlowLayout(detailSearchHost, 0, 8, 8);
-    m_detailSearchEdit = new QLineEdit(m_detailCard);
-    m_detailSearchEdit->setPlaceholderText(tr("Detay / hex icinde ara"));
-    m_findDetailButton = new QPushButton(tr("Detayda Bul"), m_detailCard);
-    m_findHexButton = new QPushButton(tr("Hex'te Bul"), m_detailCard);
-    m_findFlowStreamButton = new QPushButton(tr("Flow'da Bul"), m_detailCard);
-    m_findFlowStreamPrevButton = new QPushButton(tr("Flow Onceki"), m_detailCard);
-    m_findFlowStreamNextButton = new QPushButton(tr("Flow Sonraki"), m_detailCard);
-    detailSearchRow->addWidget(m_detailSearchEdit);
-    detailSearchRow->addWidget(m_findDetailButton);
-    detailSearchRow->addWidget(m_findHexButton);
-    detailSearchRow->addWidget(m_findFlowStreamButton);
-    detailSearchRow->addWidget(m_findFlowStreamPrevButton);
-    detailSearchRow->addWidget(m_findFlowStreamNextButton);
-    detailSearchHost->setLayout(detailSearchRow);
-    m_detailView = new QPlainTextEdit(m_detailCard);
-    m_detailView->setReadOnly(true);
-    auto *hexTitle = new QLabel(tr("Hex / Raw"), m_detailCard);
-    hexTitle->setObjectName("sectionTitle");
-    m_hexView = new QPlainTextEdit(m_detailCard);
-    m_hexView->setReadOnly(true);
-    detailLayout->addWidget(detailTitle);
-    detailLayout->addWidget(detailSearchHost);
-    detailLayout->addWidget(m_detailView, 1);
-    detailLayout->addWidget(hexTitle);
-    detailLayout->addWidget(m_hexView, 1);
-
-    rightWorkspaceLayout->addWidget(m_selectionCard, 0);
-    rightWorkspaceLayout->addWidget(m_detailCard, 1);
+    auto *inspectorPanel = new PenguCoreInspectorPanel(m_rightWorkspace);
+    m_selectionCard = qobject_cast<QFrame *>(inspectorPanel->selectionCard());
+    m_detailCard = qobject_cast<QFrame *>(inspectorPanel->detailCard());
+    m_detailSearchEdit = inspectorPanel->detailSearchEdit();
+    m_findDetailButton = inspectorPanel->findDetailButton();
+    m_findHexButton = inspectorPanel->findHexButton();
+    m_findFlowStreamButton = inspectorPanel->findFlowStreamButton();
+    m_findFlowStreamPrevButton = inspectorPanel->findFlowStreamPrevButton();
+    m_findFlowStreamNextButton = inspectorPanel->findFlowStreamNextButton();
+    m_detailView = inspectorPanel->detailView();
+    m_hexView = inspectorPanel->hexView();
+    rightWorkspaceLayout->addWidget(inspectorPanel, 1);
 
     m_workspaceSplitter->addWidget(leftWorkspace);
     m_workspaceSplitter->addWidget(m_rightWorkspace);
     m_workspaceSplitter->setStretchFactor(0, 11);
     m_workspaceSplitter->setStretchFactor(1, 10);
-    m_workspaceSplitter->setSizes({1280, 360});
-
-    if (m_leftWorkspaceSplitter) {
-        m_leftWorkspaceSplitter->setSizes({760, 360});
-    }
+    m_workspaceSplitter->setSizes({900, 420});
 
     if (m_rightWorkspace) {
         m_rightWorkspace->hide();
@@ -953,8 +653,7 @@ void PenguCoreWidget::buildUi()
     if (!m_viewerOnly && m_heroPanel) {
         root->addWidget(m_heroPanel);
     }
-    root->addWidget(m_filterCard);
-    root->addWidget(m_quickActionCard);
+    root->addWidget(filterPanel);
     root->addWidget(m_emptyStateCard);
     root->addWidget(m_workspaceSplitter, 1);
 
@@ -2008,29 +1707,29 @@ void PenguCoreWidget::refreshWorkbenchLayout()
         m_flowDetailVisible = false;
         updateInspectorVisibility();
         if (m_workspaceSplitter) {
-            m_workspaceSplitter->setSizes({1680, 0});
+            m_workspaceSplitter->setSizes({980, 0});
         }
         if (m_leftWorkspaceSplitter) {
-            m_leftWorkspaceSplitter->setSizes({760, 320});
+            m_leftWorkspaceSplitter->setSizes({520, 260});
         }
         break;
     case 1:
         m_inspectorVisible = true;
         updateInspectorVisibility();
         if (m_workspaceSplitter) {
-            m_workspaceSplitter->setSizes({1280, 520});
+            m_workspaceSplitter->setSizes({760, 420});
         }
         if (m_leftWorkspaceSplitter) {
-            m_leftWorkspaceSplitter->setSizes({760, 320});
+            m_leftWorkspaceSplitter->setSizes({520, 260});
         }
         break;
     case 2:
         m_inspectorVisible = false;
         if (m_workspaceSplitter) {
-            m_workspaceSplitter->setSizes({1760, 0});
+            m_workspaceSplitter->setSizes({1040, 0});
         }
         if (m_leftWorkspaceSplitter) {
-            m_leftWorkspaceSplitter->setSizes({320, 860});
+            m_leftWorkspaceSplitter->setSizes({260, 620});
         }
         m_flowDetailVisible = true;
         updateInspectorVisibility();
@@ -2040,10 +1739,10 @@ void PenguCoreWidget::refreshWorkbenchLayout()
         m_flowDetailVisible = false;
         updateInspectorVisibility();
         if (m_workspaceSplitter) {
-            m_workspaceSplitter->setSizes({920, 780});
+            m_workspaceSplitter->setSizes({620, 540});
         }
         if (m_leftWorkspaceSplitter) {
-            m_leftWorkspaceSplitter->setSizes({820, 240});
+            m_leftWorkspaceSplitter->setSizes({560, 220});
         }
         break;
     default:
@@ -2227,106 +1926,15 @@ void PenguCoreWidget::focusOnHttp()
 
 QJsonObject PenguCoreWidget::buildSessionReportObject(bool visibleOnly) const
 {
-    QJsonObject rootObject;
     if (!m_module || !m_module->engine()) {
-        return rootObject;
+        return {};
     }
-
-    const auto *engine = m_module->engine();
-    const auto &packets = engine->packets();
-    const auto &flows = engine->flows();
-    const SessionPacketStats stats = collectSessionPacketStats(packets);
-    const qint64 durationMs = (stats.firstPacketUtc.isValid() && stats.lastPacketUtc.isValid())
-        ? std::max<qint64>(0, stats.firstPacketUtc.msecsTo(stats.lastPacketUtc))
-        : 0;
-
-    rootObject.insert(QStringLiteral("file"), engine->lastOpenedFile());
-    rootObject.insert(QStringLiteral("format"), engine->lastOpenedFormat());
-    rootObject.insert(QStringLiteral("status"), engine->statusText());
-    rootObject.insert(QStringLiteral("session_opened_utc"), engine->lastSessionOpenedUtc().toString(Qt::ISODateWithMs));
-    rootObject.insert(QStringLiteral("first_packet_utc"), stats.firstPacketUtc.toString(Qt::ISODateWithMs));
-    rootObject.insert(QStringLiteral("last_packet_utc"), stats.lastPacketUtc.toString(Qt::ISODateWithMs));
-    rootObject.insert(QStringLiteral("duration_ms"), QString::number(durationMs));
-    rootObject.insert(QStringLiteral("total_original_bytes"), QString::number(stats.totalBytes));
-    rootObject.insert(QStringLiteral("total_captured_bytes"), QString::number(stats.totalCapturedBytes));
-    rootObject.insert(QStringLiteral("captured_frames"), QString::number(engine->liveCapturedFrameCount()));
-    rootObject.insert(QStringLiteral("analyzed_frames"), QString::number(engine->liveAnalyzedFrameCount()));
-    rootObject.insert(QStringLiteral("window_frames"), QString::number(engine->packets().size()));
-    rootObject.insert(QStringLiteral("flow_count"), flows.size());
-    rootObject.insert(QStringLiteral("live_running"), engine->isLiveCaptureRunning());
-    rootObject.insert(QStringLiteral("live_health"), engine->liveHealthStatus());
-    rootObject.insert(QStringLiteral("live_filter"), engine->liveCaptureFilter());
-    rootObject.insert(QStringLiteral("live_save_format"), engine->liveSaveFormat());
-    rootObject.insert(QStringLiteral("live_save_path"), engine->lastLiveCaptureSavePath());
-    rootObject.insert(QStringLiteral("live_started_utc"), engine->liveCaptureStartedUtc().toString(Qt::ISODateWithMs));
-    rootObject.insert(QStringLiteral("live_stopped_utc"), engine->liveCaptureStoppedUtc().toString(Qt::ISODateWithMs));
-    rootObject.insert(QStringLiteral("live_duration_ms"), QString::number(engine->liveCaptureDurationMs()));
-    rootObject.insert(QStringLiteral("drop_count"), QString::number(engine->liveDroppedFrameCount()));
-    rootObject.insert(QStringLiteral("trim_count"), QString::number(engine->liveTrimmedFrameCount()));
-    rootObject.insert(QStringLiteral("packets_per_second"), QString::number(engine->livePacketsPerSecond(), 'f', 3));
-    rootObject.insert(QStringLiteral("bytes_per_second"), QString::number(engine->liveBytesPerSecond(), 'f', 3));
-    rootObject.insert(QStringLiteral("visible_only"), visibleOnly);
-    rootObject.insert(QStringLiteral("visible_packet_count"), m_visiblePacketIndices.size());
-    rootObject.insert(QStringLiteral("visible_flow_count"), m_visibleFlowIndices.size());
-
-    QJsonArray protocolArray;
-    for (auto it = stats.protocolCounts.cbegin(); it != stats.protocolCounts.cend(); ++it) {
-        QJsonObject protocolObject;
-        protocolObject.insert(QStringLiteral("name"), it.key());
-        protocolObject.insert(QStringLiteral("count"), it.value());
-        protocolArray.append(protocolObject);
-    }
-    rootObject.insert(QStringLiteral("protocol_breakdown"), protocolArray);
-
-    QJsonArray packetsArray;
-    const QVector<int> packetIndices = visibleOnly
-        ? m_visiblePacketIndices
-        : [&packets]() {
-              QVector<int> indices;
-              indices.reserve(packets.size());
-              for (int i = 0; i < packets.size(); ++i) {
-                  indices.push_back(i);
-              }
-              return indices;
-          }();
-    for (int index : packetIndices) {
-        if (index < 0 || index >= packets.size()) {
-            continue;
-        }
-        packetsArray.append(packetToJsonObject(packets[index]));
-    }
-    rootObject.insert(QStringLiteral("packets"), packetsArray);
-
-    QJsonArray flowsArray;
-    const QVector<int> flowIndices = visibleOnly
-        ? m_visibleFlowIndices
-        : [&flows]() {
-              QVector<int> indices;
-              indices.reserve(flows.size());
-              for (int i = 0; i < flows.size(); ++i) {
-                  indices.push_back(i);
-              }
-              return indices;
-          }();
-    for (int index : flowIndices) {
-        if (index < 0 || index >= flows.size()) {
-            continue;
-        }
-        const FlowStats &flow = flows[index];
-        QJsonObject flowObject;
-        flowObject.insert(QStringLiteral("source"), QStringLiteral("%1:%2").arg(flow.key.sourceAddress).arg(flow.key.sourcePort));
-        flowObject.insert(QStringLiteral("destination"), QStringLiteral("%1:%2").arg(flow.key.destinationAddress).arg(flow.key.destinationPort));
-        flowObject.insert(QStringLiteral("transport"), flow.key.transport);
-        flowObject.insert(QStringLiteral("packet_count"), flow.packetCount);
-        flowObject.insert(QStringLiteral("byte_count"), QString::number(flow.byteCount));
-        flowObject.insert(QStringLiteral("first_seen_utc"), flow.firstSeenUtc.toString(Qt::ISODateWithMs));
-        flowObject.insert(QStringLiteral("last_seen_utc"), flow.lastSeenUtc.toString(Qt::ISODateWithMs));
-        flowObject.insert(QStringLiteral("detail"), buildFlowDetailText(flow));
-        flowsArray.append(flowObject);
-    }
-    rootObject.insert(QStringLiteral("flows"), flowsArray);
-
-    return rootObject;
+    return pengufoce::pengucore::buildSessionReportObject(*m_module->engine(),
+                                                          m_visiblePacketIndices,
+                                                          m_visibleFlowIndices,
+                                                          visibleOnly,
+                                                          [this](const PacketRecord &packet) { return primaryProtocolLabel(packet); },
+                                                          [this](const FlowStats &flow) { return buildFlowDetailText(flow); });
 }
 
 void PenguCoreWidget::exportVisibleAnalysis()
@@ -2506,7 +2114,7 @@ void PenguCoreWidget::exportSelectedPacketJson()
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return;
     }
-    file.write(QJsonDocument(packetToJsonObject(*packet)).toJson(QJsonDocument::Indented));
+    file.write(QJsonDocument(pengufoce::pengucore::buildPacketJsonObject(*packet)).toJson(QJsonDocument::Indented));
     file.close();
 }
 
@@ -3189,3 +2797,4 @@ const FlowStats *PenguCoreWidget::selectedFlow() const
 
     return &flows[flowIndex];
 }
+

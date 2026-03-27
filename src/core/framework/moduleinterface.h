@@ -29,10 +29,32 @@ public:
 
     virtual void initialize(SettingsManager *settings, Logger *logger) = 0;
     virtual QVariantMap defaultSettings() const { return {}; }
+    virtual QVariantMap saveState() const { return {}; }
+    virtual bool loadState(const QVariantMap &state)
+    {
+        Q_UNUSED(state);
+        return true;
+    }
+    virtual void reset() { stop(); }
+    virtual QString healthStatus() const { return QStringLiteral("HEALTHY"); }
+
+    void bindContext(SettingsManager *settings, Logger *logger)
+    {
+        m_settings = settings;
+        m_logger = logger;
+    }
+
+protected:
+    SettingsManager *settings() const { return m_settings; }
+    Logger *logger() const { return m_logger; }
 
 public slots:
     virtual void start() = 0;
     virtual void stop() = 0;
+
+private:
+    SettingsManager *m_settings = nullptr;
+    Logger *m_logger = nullptr;
 };
 
 Q_DECLARE_METATYPE(ModuleInterface *)

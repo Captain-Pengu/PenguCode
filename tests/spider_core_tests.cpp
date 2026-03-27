@@ -38,12 +38,17 @@ class FakeSpiderFetcher final : public ISpiderFetcher
 public:
     void addGet(const QString &url, const SpiderFetchResult &result)
     {
-        m_getResults[url] = result;
+        m_getResults[url].push_back(result);
     }
 
     void addPost(const QString &url, const SpiderFetchResult &result)
     {
-        m_postResults[url] = result;
+        m_postResults[url].push_back(result);
+    }
+
+    int fetchCount(const QString &url) const
+    {
+        return m_fetchCounts.value(url);
     }
 
     SpiderFetchResult fetch(const QUrl &url, int timeoutMs, const QVariantMap &headers = {}) override
@@ -51,9 +56,15 @@ public:
         Q_UNUSED(timeoutMs);
         Q_UNUSED(headers);
         const QString key = url.toString();
+        m_fetchCounts[key] += 1;
         auto it = m_getResults.find(key);
-        if (it != m_getResults.end()) {
-            return it.value();
+        if (it != m_getResults.end() && !it.value().isEmpty()) {
+            if (it.value().size() > 1) {
+                SpiderFetchResult result = it.value().front();
+                it.value().pop_front();
+                return result;
+            }
+            return it.value().front();
         }
 
         SpiderFetchResult result;
@@ -71,9 +82,15 @@ public:
         Q_UNUSED(timeoutMs);
         Q_UNUSED(headers);
         const QString key = url.toString();
+        m_postCounts[key] += 1;
         auto it = m_postResults.find(key);
-        if (it != m_postResults.end()) {
-            return it.value();
+        if (it != m_postResults.end() && !it.value().isEmpty()) {
+            if (it.value().size() > 1) {
+                SpiderFetchResult result = it.value().front();
+                it.value().pop_front();
+                return result;
+            }
+            return it.value().front();
         }
         return fetch(url, timeoutMs, headers);
     }
@@ -89,8 +106,10 @@ public:
     }
 
 private:
-    QHash<QString, SpiderFetchResult> m_getResults;
-    QHash<QString, SpiderFetchResult> m_postResults;
+    QHash<QString, QList<SpiderFetchResult>> m_getResults;
+    QHash<QString, QList<SpiderFetchResult>> m_postResults;
+    QHash<QString, int> m_fetchCounts;
+    QHash<QString, int> m_postCounts;
 };
 
 class FakeSpiderRenderer final : public ISpiderDomRenderer
@@ -167,6 +186,7 @@ int testPortalReplayAndSuppression()
     )");
 
     auto fetcher = std::make_unique<FakeSpiderFetcher>();
+    FakeSpiderFetcher *fetcherPtr = fetcher.get();
     fetcher->addGet(seedUrl, makeHtmlResult(seedUrl, html));
     fetcher->addGet(QStringLiteral("https://portal.example.com/robots.txt"),
                     makeHtmlResult(QStringLiteral("https://portal.example.com/robots.txt"), QStringLiteral("User-agent: *")));
@@ -250,6 +270,7 @@ int testAuthWorkflowOptionalSkip()
     const QString seedHtml = QStringLiteral("<html><body><a href=\"/tenant/acme/reports\">Reports</a></body></html>");
 
     auto fetcher = std::make_unique<FakeSpiderFetcher>();
+    FakeSpiderFetcher *fetcherPtr = fetcher.get();
     fetcher->addGet(seedUrl, makeHtmlResult(seedUrl, seedHtml));
     fetcher->addGet(QStringLiteral("https://portal.example.com/robots.txt"),
                     makeHtmlResult(QStringLiteral("https://portal.example.com/robots.txt"), QStringLiteral("User-agent: *")));
@@ -406,6 +427,7 @@ int testRetryAfterAndWafBackoff()
     retryResult.pageTitle = QStringLiteral("Attention Required");
 
     auto fetcher = std::make_unique<FakeSpiderFetcher>();
+    FakeSpiderFetcher *fetcherPtr = fetcher.get();
     fetcher->addGet(seedUrl, retryResult);
     fetcher->addGet(QStringLiteral("https://portal.example.com/robots.txt"),
                     makeHtmlResult(QStringLiteral("https://portal.example.com/robots.txt"), QStringLiteral("User-agent: *")));
@@ -413,6 +435,10 @@ int testRetryAfterAndWafBackoff()
                     makeHtmlResult(QStringLiteral("https://portal.example.com/sitemap.xml"), QStringLiteral("<xml/>"), 404));
     fetcher->addGet(QStringLiteral("https://portal.example.com/manifest.json"),
                     makeHtmlResult(QStringLiteral("https://portal.example.com/manifest.json"), QStringLiteral("{}"), 404));
+    fetcher->addGet(seedUrl,
+                    makeHtmlResult(seedUrl,
+                                   QStringLiteral("<html><body>portal ok</body></html>"),
+                                   200));
 
     SpiderCore core(std::move(fetcher),
                     nullptr,
@@ -466,6 +492,26 @@ int testRetryAfterAndWafBackoff()
         }
         if (!require(hasAssetKind(assets, QStringLiteral("waf-vendor"), QStringLiteral("cloudflare")),
                      QStringLiteral("retry senaryosunda waf-vendor gelmedi"))) {
+            return 1;
+        }
+        if (!require(hasAssetKind(assets, QStringLiteral("retry-after"), QStringLiteral("delay=1000 ms")),
+                     QStringLiteral("retry-after asset gelmedi"))) {
+            return 1;
+        }
+        if (!require(hasAssetKind(assets, QStringLiteral("retry-scheduled"), QStringLiteral("retry=1/1")),
+                     QStringLiteral("retry-scheduled asset gelmedi"))) {
+            return 1;
+        }
+        if (!require(hasAssetKind(assets, QStringLiteral("host-pressure"), QStringLiteral("reason=retry+waf")),
+                     QStringLiteral("host-pressure retry asset gelmedi"))) {
+            return 1;
+        }
+        if (!require(hasAssetKind(assets, QStringLiteral("host-pressure"), QStringLiteral("reason=success-cooldown")),
+                     QStringLiteral("host-pressure cooldown asset gelmedi"))) {
+            return 1;
+        }
+        if (!require(fetcherPtr->fetchCount(seedUrl) >= 2,
+                     QStringLiteral("retry sonrasi ikinci fetch gerceklesmedi"))) {
             return 1;
         }
     }

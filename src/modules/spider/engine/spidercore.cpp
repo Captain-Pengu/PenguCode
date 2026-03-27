@@ -87,6 +87,20 @@ QUrl resolveWorkflowStepUrl(const SpiderAuthProfile::Step &step, const QUrl &cur
     return step.url;
 }
 
+QString hostPressureStateName(int score)
+{
+    if (score >= 8) {
+        return QStringLiteral("STRESSED");
+    }
+    if (score >= 5) {
+        return QStringLiteral("WAF-GUARDED");
+    }
+    if (score >= 2) {
+        return QStringLiteral("GUARDED");
+    }
+    return QStringLiteral("STABLE");
+}
+
 bool isSafeReplayRole(const QString &role)
 {
     return role == QLatin1String("arama")
@@ -1303,7 +1317,6 @@ void SpiderCore::scheduleMore()
     auto *asyncFetcher = dynamic_cast<ISpiderAsyncFetcher *>(m_fetcher.get());
     qint64 wakeDelayMs = -1;
     while (!m_stopping && m_running && queuedCount() > 0
-           && (visitedCount() + m_activeFetches.load()) < m_options.maxPages
            && m_activeFetches.load() < m_options.maxInFlight) {
         QueueEntry entry;
         bool foundReadyEntry = false;
@@ -1313,6 +1326,7 @@ void SpiderCore::scheduleMore()
                 break;
             }
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            const bool pageBudgetReached = (visitedCount() + m_activeFetches.load()) >= m_options.maxPages;
             const int queueSize = static_cast<int>(m_queue.size());
             for (int i = 0; i < queueSize; ++i) {
                 QueueEntry candidate = std::move(m_queue.front());
@@ -1320,7 +1334,8 @@ void SpiderCore::scheduleMore()
                 const std::string hostKey = candidate.url.host().toLower().toStdString();
                 const qint64 hostReadyAt = m_hostNextAllowedAt.contains(hostKey) ? m_hostNextAllowedAt[hostKey] : 0;
                 const qint64 nextReadyAt = qMax(candidate.earliestStartMs, hostReadyAt);
-                if (!foundReadyEntry && nextReadyAt <= nowMs) {
+                const bool canDispatch = !pageBudgetReached || candidate.retryCount > 0;
+                if (!foundReadyEntry && canDispatch && nextReadyAt <= nowMs) {
                     entry = std::move(candidate);
                     const int pressureScore = m_hostPressureScore.contains(hostKey) ? m_hostPressureScore[hostKey] : 0;
                     const qint64 adaptivePolitenessMs = m_options.politenessDelayMs + (pressureScore * 180);
@@ -1469,11 +1484,29 @@ void SpiderCore::consumeFetchResult(QueueEntry entry, SpiderFetchResult result)
             }
             m_hostPressureScore[hostKey] = qBound(0, pressureScore, 10);
             m_hostNextAllowedAt[hostKey] = qMax(m_hostNextAllowedAt[hostKey], QDateTime::currentMSecsSinceEpoch() + adaptiveBackoffMs);
+            emitHostPressureAsset(QString::fromStdString(hostKey),
+                                  m_hostPressureScore[hostKey],
+                                  wafChallenge ? QStringLiteral("retry+waf") : QStringLiteral("retry"));
         }
         {
             std::scoped_lock lock(m_queueMutex);
             m_queue.push(std::move(retryEntry));
         }
+        if (retryAfterMs > 0) {
+            emitAsset({QStringLiteral("retry-after"),
+                       QStringLiteral("host=%1 | delay=%2 ms | url=%3")
+                           .arg(entry.url.host(),
+                                QString::number(retryAfterMs),
+                                entry.url.toString()),
+                       entry.url.toString()});
+        }
+        emitAsset({QStringLiteral("retry-scheduled"),
+                   QStringLiteral("host=%1 | retry=%2/%3 | delay=%4 ms")
+                       .arg(entry.url.host())
+                       .arg(entry.retryCount + 1)
+                       .arg(m_options.maxRetries)
+                       .arg(effectiveRetryDelayMs),
+                   entry.url.toString()});
         if (wafChallenge) {
             emitAsset({QStringLiteral("waf-vendor"),
                        vendorHint,
@@ -1793,6 +1826,9 @@ void SpiderCore::consumeFetchResult(QueueEntry entry, SpiderFetchResult result)
                 const std::string hostKey = result.url.host().toLower().toStdString();
                 m_hostPressureScore[hostKey] = qBound(0, (m_hostPressureScore.contains(hostKey) ? m_hostPressureScore[hostKey] : 0) + 4, 10);
                 m_hostNextAllowedAt[hostKey] = qMax(m_hostNextAllowedAt[hostKey], QDateTime::currentMSecsSinceEpoch() + 2500);
+                emitHostPressureAsset(QString::fromStdString(hostKey),
+                                      m_hostPressureScore[hostKey],
+                                      QStringLiteral("waf-challenge"));
             }
             emitEndpoint({result.url,
                           QStringLiteral("waf-challenge"),
@@ -1817,6 +1853,9 @@ void SpiderCore::consumeFetchResult(QueueEntry entry, SpiderFetchResult result)
             const std::string hostKey = result.url.host().toLower().toStdString();
             if (m_hostPressureScore.contains(hostKey) && m_hostPressureScore[hostKey] > 0) {
                 m_hostPressureScore[hostKey] = qMax(0, m_hostPressureScore[hostKey] - 1);
+                emitHostPressureAsset(QString::fromStdString(hostKey),
+                                      m_hostPressureScore[hostKey],
+                                      QStringLiteral("success-cooldown"));
             }
         }
         {
@@ -2429,6 +2468,10 @@ bool SpiderCore::markVisited(const QueueEntry &entry)
         ? keyForRequest(entry.url, entry.requestMethod, entry.requestFields)
         : entry.requestKey;
     if (m_visited.contains(key)) {
+        if (entry.retryCount > 0) {
+            m_enqueued.erase(key);
+            return true;
+        }
         return false;
     }
     m_visited.insert(key);
@@ -2568,7 +2611,20 @@ void SpiderCore::finishIfDone()
         return;
     }
 
-    if ((queuedCount() == 0 || visitedCount() >= m_options.maxPages)
+    bool hasPendingRetry = false;
+    {
+        std::scoped_lock lock(m_queueMutex);
+        std::queue<QueueEntry> copy = m_queue;
+        while (!copy.empty()) {
+            if (copy.front().retryCount > 0) {
+                hasPendingRetry = true;
+                break;
+            }
+            copy.pop();
+        }
+    }
+
+    if (((queuedCount() == 0 && !hasPendingRetry) || (visitedCount() >= m_options.maxPages && !hasPendingRetry))
         && m_activeFetches.load() == 0
         && m_activeProcessing.load() == 0) {
         m_running = false;
@@ -2623,6 +2679,17 @@ void SpiderCore::emitAsset(SpiderDiscoveredAsset asset) const
     if (m_assetCallback) {
         m_assetCallback(std::move(asset));
     }
+}
+
+void SpiderCore::emitHostPressureAsset(const QString &host, int score, const QString &reason) const
+{
+    emitAsset({QStringLiteral("host-pressure"),
+               QStringLiteral("host=%1 | score=%2 | state=%3 | reason=%4")
+                   .arg(host,
+                        QString::number(score),
+                        hostPressureStateName(score),
+                        reason),
+               host});
 }
 
 bool SpiderCore::authenticateIfNeeded()

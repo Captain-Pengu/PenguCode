@@ -29,8 +29,10 @@ signals:
 
 private:
     QVariantMap defaultPalette(const QString &theme) const;
+    void persistThemeState();
 
     QString m_currentTheme;
     QVariantMap m_darkPalette;
     QVariantMap m_lightPalette;
+    SettingsManager *m_settings = nullptr;
 };

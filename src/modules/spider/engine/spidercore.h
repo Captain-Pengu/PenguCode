@@ -269,6 +269,7 @@ private:
     void emitEndpoint(SpiderDiscoveredEndpoint endpoint) const;
     void emitParameter(SpiderDiscoveredParameter parameter) const;
     void emitAsset(SpiderDiscoveredAsset asset) const;
+    void emitHostPressureAsset(const QString &host, int score, const QString &reason) const;
 
     std::unique_ptr<ISpiderFetcher> m_fetcher;
     std::unique_ptr<ISpiderDomRenderer> m_renderer;

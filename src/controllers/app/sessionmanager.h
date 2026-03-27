@@ -15,8 +15,12 @@ public:
 
     Q_INVOKABLE bool saveSession(const QString &filePath) const;
     Q_INVOKABLE QVariantMap loadSession(const QString &filePath);
+    void setThemeEngine(QObject *themeEngine);
+    void setSettingsManager(QObject *settingsManager);
 
 private:
     ModuleManager *m_moduleManager;
     Logger *m_logger;
+    QObject *m_themeEngine = nullptr;
+    QObject *m_settingsManager = nullptr;
 };

@@ -41,6 +41,7 @@
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QEvent>
+#include <QResizeEvent>
 #include <QStatusBar>
 #include <QScrollBar>
 #include <QVBoxLayout>
@@ -275,6 +276,12 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     return QMainWindow::eventFilter(watched, event);
 }
 
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    updateResponsiveShell();
+}
+
 void MainWindow::handleModuleSelectionChanged(int row)
 {
     setActiveModuleIndex(row);
@@ -351,7 +358,7 @@ void MainWindow::loadSession()
 void MainWindow::buildUi()
 {
     resize(1560, 980);
-    setMinimumSize(1240, 840);
+    setMinimumSize(980, 720);
     setWindowTitle(tr("PenguFoce Control Center"));
 
     auto *fileMenu = menuBar()->addMenu(tr("Dosya"));
@@ -385,20 +392,26 @@ void MainWindow::buildUi()
     leftRailLayout->setSpacing(12);
 
     m_sidebar = new BladeSidebar(leftRail);
-    m_sidebar->setFixedWidth(400);
     connect(m_sidebar, &BladeSidebar::moduleSelected, this, &MainWindow::handleModuleSelectionChanged);
 
     leftRailLayout->addWidget(m_sidebar, 1);
 
-    auto *scrollArea = new QScrollArea(central);
-    scrollArea->setObjectName("mainScrollArea");
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_mainScrollArea = new QScrollArea(central);
+    m_mainScrollArea->setObjectName("mainScrollArea");
+    m_mainScrollArea->setWidgetResizable(true);
+    m_mainScrollArea->setFrameShape(QFrame::NoFrame);
+    m_mainScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_mainScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
-    m_mainContentWidget = new QWidget(scrollArea);
+    m_mainContentWidget = new QWidget(m_mainScrollArea);
+    m_mainContentWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *mainColumn = pengufoce::ui::layout::createPageRoot(m_mainContentWidget, 18);
+    m_contentRail = new QWidget(m_mainContentWidget);
+    m_contentRail->setObjectName("workspaceRail");
+    m_contentRail->setMinimumWidth(0);
+    m_contentRail->setMaximumWidth(QWIDGETSIZE_MAX);
+    m_contentRail->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    auto *contentRailLayout = pengufoce::ui::layout::createPageRoot(m_contentRail, 18);
 
     auto *heroFrame = pengufoce::ui::layout::createHeroCard(central, QMargins(26, 24, 26, 24), 12);
     auto *heroLayout = qobject_cast<QVBoxLayout *>(heroFrame->layout());
@@ -452,8 +465,8 @@ void MainWindow::buildUi()
     activeCardLayout->addWidget(m_activeModuleValue);
     activeCardLayout->addWidget(m_statusHint);
 
-    summaryCard->setMinimumWidth(160);
-    activeCard->setMinimumWidth(220);
+    summaryCard->setMinimumWidth(132);
+    activeCard->setMinimumWidth(180);
     summaryRow->addWidget(summaryCard);
     summaryRow->addWidget(activeCard);
     summaryHost->setLayout(summaryRow);
@@ -464,7 +477,7 @@ void MainWindow::buildUi()
     heroLayout->addWidget(summaryHost);
 
     m_contentStack = new QStackedWidget(central);
-    m_contentStack->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    m_contentStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_pageOpacityEffect = new QGraphicsOpacityEffect(m_contentStack);
     m_pageOpacityEffect->setOpacity(1.0);
     m_contentStack->setGraphicsEffect(m_pageOpacityEffect);
@@ -474,17 +487,38 @@ void MainWindow::buildUi()
     m_pageFadeAnimation->setEndValue(1.0);
     m_pageFadeAnimation->setEasingCurve(QEasingCurve::OutCubic);
 
-    mainColumn->addWidget(heroFrame);
-    mainColumn->addWidget(m_contentStack, 1);
-    mainColumn->addStretch(0);
+    contentRailLayout->addWidget(heroFrame);
+    contentRailLayout->addWidget(m_contentStack, 1);
+    mainColumn->addWidget(m_contentRail, 1);
 
-    scrollArea->setWidget(m_mainContentWidget);
+    m_mainScrollArea->setWidget(m_mainContentWidget);
 
     rootLayout->addWidget(leftRail);
-    rootLayout->addWidget(scrollArea, 1);
+    rootLayout->addWidget(m_mainScrollArea, 1);
 
     setCentralWidget(central);
     statusBar()->showMessage(tr("Hazir"));
+    updateResponsiveShell();
+}
+
+void MainWindow::updateResponsiveShell()
+{
+    if (!m_sidebar || !m_contentRail || !m_mainScrollArea) {
+        return;
+    }
+
+    const int widthNow = width();
+    int sidebarWidth = 360;
+    if (widthNow <= 1180) {
+        sidebarWidth = 260;
+    } else if (widthNow <= 1380) {
+        sidebarWidth = 300;
+    } else if (widthNow <= 1600) {
+        sidebarWidth = 330;
+    }
+
+    m_sidebar->setFixedWidth(sidebarWidth);
+    m_contentRail->setMinimumWidth(0);
 }
 
 void MainWindow::populateModules()

@@ -1,5 +1,6 @@
 add_library(pengucore STATIC
     include/pengucore/api/pengucoreengine.h
+    include/pengucore/api/pengucoresessionreportservice.h
     include/pengucore/model/packettypes.h
     include/pengucore/capture/livecaptureengine.h
     include/pengucore/capture/pcapfilereader.h
@@ -7,6 +8,7 @@ add_library(pengucore STATIC
     include/pengucore/parser/basicframeparser.h
     include/pengucore/flow/flowtracker.h
     src/api/pengucoreengine.cpp
+    src/api/pengucoresessionreportservice.cpp
     src/capture/livecaptureengine.cpp
     src/capture/pcapfilereader.cpp
     src/capture/pcapfilewriter.cpp
