@@ -2,6 +2,7 @@
 /out/
 /bin/
 /dist/
+build.zip
 
 /CMakeFiles/
 /CMakeCache.txt
