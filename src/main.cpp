@@ -1,6 +1,7 @@
 #include <QApplication>
 
 #include "controllers/app/appcontroller.h"
+#include "core/logging/crashhandler.h"
 #include "ui/shell/mainwindow.h"
 
 int main(int argc, char *argv[])
@@ -10,6 +11,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName("PenguFoce");
     QApplication::setEffectEnabled(Qt::UI_AnimateTooltip, false);
     QApplication::setEffectEnabled(Qt::UI_FadeTooltip, false);
+    pengufoce::core::logging::installCrashHandlers();
 
     AppController controller;
     MainWindow window(&controller);

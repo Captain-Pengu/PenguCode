@@ -562,8 +562,8 @@ void ReconWidget::setActiveView(bool active)
         }
     }
 
-    if (auto *pulse = static_cast<ReconPulseWidget *>(m_pulseWidget)) {
-        pulse->setAnimationEnabled(active);
+    if (m_livePanel) {
+        m_livePanel->setPulseAnimationEnabled(active);
     }
 }
 
@@ -613,8 +613,8 @@ void ReconWidget::startRecon()
     m_activityValue->setText(tr("Hedef ayrisiyor ve tarama boru hatti baslatiliyor"));
     m_progressBar->setValue(3);
     m_scanTimer->restart();
-    if (auto *pulse = static_cast<ReconPulseWidget *>(m_pulseWidget)) {
-        pulse->setActive(true);
+    if (m_livePanel) {
+        m_livePanel->setPulseActive(true);
     }
     if (m_module && m_module->settingsManager()) {
         SettingsManager *settings = m_module->settingsManager();
@@ -640,8 +640,8 @@ void ReconWidget::stopRecon()
     m_statusValue->setText(tr("Durduruldu"));
     m_activityValue->setText(tr("Tarama operator tarafindan durduruldu"));
     m_progressBar->setValue(0);
-    if (auto *pulse = static_cast<ReconPulseWidget *>(m_pulseWidget)) {
-        pulse->setActive(false);
+    if (m_livePanel) {
+        m_livePanel->setPulseActive(false);
     }
     appendFeed(tr("Kesif taramasi durdurma istegi gonderildi"));
 }
@@ -692,8 +692,8 @@ void ReconWidget::handleFinished(const ScanReport &report, int securityScore)
     m_scoreValue->setText(QString::number(securityScore));
     m_activityValue->setText(tr("Tarama tamamlandi, bulgular panellere dagitildi"));
     m_progressBar->setValue(100);
-    if (auto *pulse = static_cast<ReconPulseWidget *>(m_pulseWidget)) {
-        pulse->setActive(false);
+    if (m_livePanel) {
+        m_livePanel->setPulseActive(false);
     }
     appendFeed(tr("Ana tarama tamamlandi: %1, puan %2").arg(report.host).arg(securityScore));
     refreshSpiderEvidence();
@@ -1126,12 +1126,12 @@ void ReconWidget::buildUi()
     heroLayout->addWidget(subtitle);
     heroLayout->addWidget(summaryPanel);
 
-    auto *livePanel = new ReconLivePanel(this);
-    m_pulseWidget = livePanel->pulseWidget();
-    m_feedConsole = livePanel->feedConsole();
-    m_activityValue = livePanel->activityValue();
-    m_progressBar = livePanel->progressBar();
-    m_phaseSummaryValue = livePanel->phaseSummaryValue();
+    m_livePanel = new ReconLivePanel(this);
+    m_pulseWidget = m_livePanel->pulseWidget();
+    m_feedConsole = m_livePanel->feedConsole();
+    m_activityValue = m_livePanel->activityValue();
+    m_progressBar = m_livePanel->progressBar();
+    m_phaseSummaryValue = m_livePanel->phaseSummaryValue();
 
     auto *setupCard = new ReconControlPanel(this);
     m_targetEdit = setupCard->targetEdit();
@@ -1209,7 +1209,7 @@ void ReconWidget::buildUi()
 
     root->addWidget(hero);
     root->addWidget(setupCard);
-    root->addWidget(livePanel);
+    root->addWidget(m_livePanel);
     root->addWidget(findingsCard);
     root->addWidget(evidenceCard);
     root->addWidget(reportCard);

@@ -514,6 +514,19 @@ SpiderWidget::SpiderWidget(SpiderModule *module, QWidget *parent)
     reloadSettings();
 }
 
+SpiderWidget::~SpiderWidget()
+{
+    if (m_statsRefreshTimer) {
+        m_statsRefreshTimer->stop();
+    }
+    if (m_stateWatchdogTimer) {
+        m_stateWatchdogTimer->stop();
+    }
+    if (m_module) {
+        disconnect(m_module, nullptr, this, nullptr);
+    }
+}
+
 void SpiderWidget::reloadSettings()
 {
     if (!m_module) {

@@ -19,6 +19,8 @@ public:
     QLabel *activityValue() const { return m_activityValue; }
     QProgressBar *progressBar() const { return m_progressBar; }
     QLabel *phaseSummaryValue() const { return m_phaseSummaryValue; }
+    void setPulseActive(bool active);
+    void setPulseAnimationEnabled(bool enabled);
 
 private:
     QWidget *m_pulseWidget = nullptr;

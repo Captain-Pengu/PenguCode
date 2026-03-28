@@ -9,11 +9,10 @@
 
 #include <QMetaObject>
 #include <QDateTime>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
 #include <QUrlQuery>
-
-#include <thread>
 
 namespace {
 
@@ -148,57 +147,84 @@ SpiderModule::SpiderModule(QObject *parent)
 {
 }
 
+SpiderModule::~SpiderModule()
+{
+    m_terminalTransition = true;
+    m_scanning = false;
+    if (m_idleGuardTimer) {
+        m_idleGuardTimer->stop();
+        m_idleGuardTimer->disconnect(this);
+    }
+    destroyCoreAsync();
+}
+
 void SpiderModule::createCore()
 {
+    QPointer<SpiderModule> self(this);
     m_core = std::make_unique<SpiderCore>(createBestSpiderFetcher(), createBestSpiderRenderer());
-    m_core->setEventCallback([this](QString message) {
-        QMetaObject::invokeMethod(this, [this, message = std::move(message)]() {
-            if (!m_scanning && !message.startsWith(QStringLiteral("SpiderCore tamamlandi."))) {
+    m_core->setEventCallback([self](QString message) {
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self, [self, message = std::move(message)]() {
+            if (!self) {
+                return;
+            }
+            if (!self->m_scanning && !message.startsWith(QStringLiteral("SpiderCore tamamlandi."))) {
                 return;
             }
             if (!message.startsWith(QStringLiteral("[scheduler]"))) {
-                bumpIdleGuard();
+                self->bumpIdleGuard();
             }
-            emit crawlEvent(message);
-            if (message.startsWith(QStringLiteral("SpiderCore tamamlandi."))) {
-                handleCoreFinished();
-            }
+            emit self->crawlEvent(message);
         }, Qt::QueuedConnection);
     });
-    m_core->setEndpointCallback([this](SpiderDiscoveredEndpoint endpoint) {
-        QMetaObject::invokeMethod(this, [this, endpoint = std::move(endpoint)]() {
-            if (!m_scanning) {
+    m_core->setEndpointCallback([self](SpiderDiscoveredEndpoint endpoint) {
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self, [self, endpoint = std::move(endpoint)]() {
+            if (!self || !self->m_scanning) {
                 return;
             }
-            recordEndpoint(endpoint.url,
-                           endpoint.kind,
-                           endpoint.source,
-                           endpoint.depth,
-                           endpoint.statusCode,
-                           endpoint.contentType,
-                           endpoint.sessionState,
-                           endpoint.finalUrl,
-                           endpoint.pageTitle);
+            self->recordEndpoint(endpoint.url,
+                                 endpoint.kind,
+                                 endpoint.source,
+                                 endpoint.depth,
+                                 endpoint.statusCode,
+                                 endpoint.contentType,
+                                 endpoint.sessionState,
+                                 endpoint.finalUrl,
+                                 endpoint.pageTitle);
         }, Qt::QueuedConnection);
     });
-    m_core->setParameterCallback([this](SpiderDiscoveredParameter parameter) {
-        QMetaObject::invokeMethod(this, [this, parameter = std::move(parameter)]() {
-            if (!m_scanning) {
+    m_core->setParameterCallback([self](SpiderDiscoveredParameter parameter) {
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self, [self, parameter = std::move(parameter)]() {
+            if (!self || !self->m_scanning) {
                 return;
             }
-            recordParameter(parameter.name, parameter.url, parameter.origin);
+            self->recordParameter(parameter.name, parameter.url, parameter.origin);
         }, Qt::QueuedConnection);
     });
-    m_core->setAssetCallback([this](SpiderDiscoveredAsset asset) {
-        QMetaObject::invokeMethod(this, [this, asset = std::move(asset)]() {
-            if (!m_scanning) {
+    m_core->setAssetCallback([self](SpiderDiscoveredAsset asset) {
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self, [self, asset = std::move(asset)]() {
+            if (!self || !self->m_scanning) {
                 return;
             }
-            recordAsset(asset.kind, asset.value, asset.source);
+            self->recordAsset(asset.kind, asset.value, asset.source);
         }, Qt::QueuedConnection);
     });
-    m_core->setFinishedCallback([this]() {
-        QMetaObject::invokeMethod(this, &SpiderModule::handleCoreFinished, Qt::QueuedConnection);
+    m_core->setFinishedCallback([self]() {
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self, &SpiderModule::handleCoreFinished, Qt::QueuedConnection);
     });
 }
 
@@ -208,10 +234,13 @@ void SpiderModule::destroyCoreAsync()
         return;
     }
     auto core = std::move(m_core);
-    std::thread([core = std::move(core)]() mutable {
-        core->stop();
-        core.reset();
-    }).detach();
+    core->setEventCallback({});
+    core->setEndpointCallback({});
+    core->setParameterCallback({});
+    core->setAssetCallback({});
+    core->setFinishedCallback({});
+    core->stop();
+    core.reset();
 }
 
 QString SpiderModule::id() const
@@ -296,8 +325,6 @@ void SpiderModule::initialize(SettingsManager *settings, Logger *logger)
             forceFinishFromGuard(tr("ilerleme algilanmadi"));
         });
     }
-
-    createCore();
 
     if (m_logger) {
         m_logger->info(id(), "Spider module initialized");
@@ -617,6 +644,7 @@ void SpiderModule::start()
     m_parameters.clear();
     m_assets.clear();
     m_visitedCount = 0;
+    m_terminalTransition = false;
     m_coverageScore = 0;
     m_coverageSummary = tr("Tarama baslatildi, yuzey puani hesaplaniyor");
     m_benchmarkSummary = tr("Benchmark hazirlaniyor");
@@ -774,9 +802,10 @@ void SpiderModule::start()
 
 void SpiderModule::stop()
 {
-    if (!m_scanning || !m_core) {
+    if (!m_scanning || !m_core || m_terminalTransition) {
         return;
     }
+    m_terminalTransition = true;
 
     if (m_idleGuardTimer) {
         m_idleGuardTimer->stop();
@@ -814,9 +843,10 @@ void SpiderModule::bumpIdleGuard()
 
 void SpiderModule::forceFinishFromGuard(const QString &reason)
 {
-    if (!m_scanning) {
+    if (!m_scanning || m_terminalTransition) {
         return;
     }
+    m_terminalTransition = true;
 
     if (m_idleGuardTimer) {
         m_idleGuardTimer->stop();
@@ -1171,9 +1201,10 @@ void SpiderModule::recordAsset(const QString &kind, const QString &value, const 
 
 void SpiderModule::handleCoreFinished()
 {
-    if (!m_scanning) {
+    if (!m_scanning || m_terminalTransition) {
         return;
     }
+    m_terminalTransition = true;
 
     if (m_idleGuardTimer) {
         m_idleGuardTimer->stop();

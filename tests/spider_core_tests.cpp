@@ -38,16 +38,19 @@ class FakeSpiderFetcher final : public ISpiderFetcher
 public:
     void addGet(const QString &url, const SpiderFetchResult &result)
     {
+        QMutexLocker locker(&m_mutex);
         m_getResults[url].push_back(result);
     }
 
     void addPost(const QString &url, const SpiderFetchResult &result)
     {
+        QMutexLocker locker(&m_mutex);
         m_postResults[url].push_back(result);
     }
 
     int fetchCount(const QString &url) const
     {
+        QMutexLocker locker(&m_mutex);
         return m_fetchCounts.value(url);
     }
 
@@ -55,6 +58,7 @@ public:
     {
         Q_UNUSED(timeoutMs);
         Q_UNUSED(headers);
+        QMutexLocker locker(&m_mutex);
         const QString key = url.toString();
         m_fetchCounts[key] += 1;
         auto it = m_getResults.find(key);
@@ -82,15 +86,18 @@ public:
         Q_UNUSED(timeoutMs);
         Q_UNUSED(headers);
         const QString key = url.toString();
-        m_postCounts[key] += 1;
-        auto it = m_postResults.find(key);
-        if (it != m_postResults.end() && !it.value().isEmpty()) {
-            if (it.value().size() > 1) {
-                SpiderFetchResult result = it.value().front();
-                it.value().pop_front();
-                return result;
+        {
+            QMutexLocker locker(&m_mutex);
+            m_postCounts[key] += 1;
+            auto it = m_postResults.find(key);
+            if (it != m_postResults.end() && !it.value().isEmpty()) {
+                if (it.value().size() > 1) {
+                    SpiderFetchResult result = it.value().front();
+                    it.value().pop_front();
+                    return result;
+                }
+                return it.value().front();
             }
-            return it.value().front();
         }
         return fetch(url, timeoutMs, headers);
     }
@@ -106,6 +113,7 @@ public:
     }
 
 private:
+    mutable QMutex m_mutex;
     QHash<QString, QList<SpiderFetchResult>> m_getResults;
     QHash<QString, QList<SpiderFetchResult>> m_postResults;
     QHash<QString, int> m_fetchCounts;

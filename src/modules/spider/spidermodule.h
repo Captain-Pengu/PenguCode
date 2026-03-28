@@ -53,6 +53,7 @@ class SpiderModule : public ModuleInterface
 
 public:
     explicit SpiderModule(QObject *parent = nullptr);
+    ~SpiderModule() override;
 
     QString id() const override;
     QString name() const override;
@@ -209,4 +210,5 @@ private:
     int m_idleGuardLastQueued = -1;
     int m_idleGuardStableTicks = 0;
     qint64 m_lastDiscoveryMs = 0;
+    bool m_terminalTransition = false;
 };

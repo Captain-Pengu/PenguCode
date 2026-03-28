@@ -25,6 +25,7 @@ class SpiderWidget : public QWidget
 
 public:
     explicit SpiderWidget(SpiderModule *module, QWidget *parent = nullptr);
+    ~SpiderWidget() override;
     void reloadSettings();
 
 private slots:

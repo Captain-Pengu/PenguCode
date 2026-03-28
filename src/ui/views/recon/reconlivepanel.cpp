@@ -33,6 +33,27 @@ public:
         update();
     }
 
+    void setActive(bool active)
+    {
+        m_active = active;
+        update();
+    }
+
+    void setAnimationEnabled(bool enabled)
+    {
+        if (!m_timer) {
+            return;
+        }
+
+        if (enabled) {
+            if (!m_timer->isActive()) {
+                m_timer->start();
+            }
+        } else if (m_timer->isActive()) {
+            m_timer->stop();
+        }
+    }
+
 protected:
     void paintEvent(QPaintEvent *) override
     {
@@ -61,6 +82,7 @@ protected:
 private:
     QColor m_color = QColor("#f05c86");
     qreal m_phase = 0.0;
+    bool m_active = false;
     QTimer *m_timer = nullptr;
 };
 
@@ -125,4 +147,20 @@ ReconLivePanel::ReconLivePanel(QWidget *parent)
 
     root->addWidget(feedCard);
     root->addWidget(opsCard);
+}
+
+void ReconLivePanel::setPulseActive(bool active)
+{
+    auto *pulse = dynamic_cast<ReconPulseWidget *>(m_pulseWidget);
+    if (pulse) {
+        pulse->setActive(active);
+    }
+}
+
+void ReconLivePanel::setPulseAnimationEnabled(bool enabled)
+{
+    auto *pulse = dynamic_cast<ReconPulseWidget *>(m_pulseWidget);
+    if (pulse) {
+        pulse->setAnimationEnabled(enabled);
+    }
 }

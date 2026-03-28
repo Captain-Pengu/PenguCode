@@ -1,6 +1,7 @@
 #include "bladesidebar.h"
 
 #include <QHBoxLayout>
+#include <QByteArray>
 #include <QQmlContext>
 #include <QQuickWidget>
 #include <QUrl>
@@ -311,5 +312,10 @@ void BladeSidebar::stepOrbWindow(int direction)
 void BladeSidebar::setupQuickScene()
 {
     m_quickWidget->rootContext()->setContextProperty(QStringLiteral("bladeSidebarBridge"), this);
-    m_quickWidget->setSource(QUrl(QStringLiteral("qrc:/src/ui/shell/qml/OrbitalSidebar3D.qml")));
+    const QByteArray force3d = qgetenv("PENGUFOCE_ENABLE_3D_SIDEBAR");
+    const bool use3d = force3d == "1" || force3d.compare("true", Qt::CaseInsensitive) == 0;
+    const QString source = use3d
+        ? QStringLiteral("qrc:/src/ui/shell/qml/OrbitalSidebar3D.qml")
+        : QStringLiteral("qrc:/src/ui/shell/qml/OrbitalSidebar2D.qml");
+    m_quickWidget->setSource(QUrl(source));
 }

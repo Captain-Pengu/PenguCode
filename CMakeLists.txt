@@ -74,6 +74,7 @@ qt_add_executable(PenguFoce
     src/controllers/app/sessionmanager.cpp
     src/core/logging/logger.cpp
     src/core/logging/logmodel.cpp
+    src/core/logging/crashhandler.cpp
     src/core/theme/themeengine.cpp
     src/modules/portscanner/portscannermodule.cpp
     src/modules/proxy/proxymodule.cpp
@@ -127,7 +128,13 @@ qt_add_executable(PenguFoce
 qt_add_resources(PenguFoce "pengufoce_ui_shell_qml"
     PREFIX "/"
     FILES
+        src/ui/shell/qml/OrbitalSidebar2D.qml
         src/ui/shell/qml/OrbitalSidebar3D.qml
+)
+
+set_source_files_properties(
+    src/ui/shell/qml/OrbitalSidebar2D.qml
+    PROPERTIES QT_RESOURCE_ALIAS "OrbitalSidebar2D.qml"
 )
 
 set_source_files_properties(
@@ -152,7 +159,7 @@ target_link_libraries(PenguFoce PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(PenguFoce PRIVATE mswsock)
+    target_link_libraries(PenguFoce PRIVATE mswsock Dbghelp)
 endif()
 
 if(CURL_FOUND)

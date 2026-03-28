@@ -19,6 +19,7 @@ class QTextEdit;
 class QWidget;
 class QTimer;
 class ReportPreviewDialog;
+class ReconLivePanel;
 
 class ReconWidget : public QWidget
 {
@@ -145,4 +146,5 @@ private:
     ReportPreviewDialog *m_reportPreviewDialog = nullptr;
     QElapsedTimer *m_scanTimer = nullptr;
     QTimer *m_spiderRefreshTimer = nullptr;
+    ReconLivePanel *m_livePanel = nullptr;
 };

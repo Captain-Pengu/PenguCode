@@ -203,6 +203,11 @@ public:
     ~AsyncQtSpiderFetcher() override
     {
         m_shuttingDown = true;
+        if (!m_workerRoot || !m_thread.isRunning()) {
+            m_workerRoot = nullptr;
+            m_manager = nullptr;
+            return;
+        }
         QPointer<QObject> workerRoot(m_workerRoot);
         QMetaObject::invokeMethod(m_workerRoot, [this, workerRoot]() {
             if (!workerRoot) {
@@ -226,6 +231,8 @@ public:
         }
         m_thread.quit();
         m_thread.wait();
+        m_workerRoot = nullptr;
+        m_manager = nullptr;
     }
 
     SpiderFetchResult fetch(const QUrl &url, int timeoutMs, const QVariantMap &headers = {}) override
@@ -277,6 +284,9 @@ public:
 
     void cancelAll() override
     {
+        if (!m_workerRoot || !m_thread.isRunning()) {
+            return;
+        }
         QMetaObject::invokeMethod(m_workerRoot, [this]() {
             for (QNetworkReply *reply : std::as_const(m_liveReplies)) {
                 if (reply) {
@@ -330,7 +340,7 @@ private:
 
     void startRequest(const QUrl &url, int timeoutMs, const QByteArray &payload, bool isPost, const QVariantMap &headers, FetchCallback callback)
     {
-        if (m_shuttingDown.load()) {
+        if (m_shuttingDown.load() || !m_workerRoot || !m_thread.isRunning()) {
             SpiderFetchResult errorResult;
             errorResult.url = url;
             errorResult.finalUrl = url;
@@ -369,8 +379,13 @@ private:
             });
             timer->start(timeoutMs);
 
-            QObject::connect(reply, &QNetworkReply::finished, reply, [this, requestId, reply, url, timer]() {
+            QPointer<AsyncQtSpiderFetcher> guard(this);
+            QObject::connect(reply, &QNetworkReply::finished, reply, [guard, requestId, reply, url, timer]() {
                 Q_UNUSED(timer);
+                if (!guard) {
+                    reply->deleteLater();
+                    return;
+                }
                 SpiderFetchResult result;
                 result.url = url;
                 result.finalUrl = reply->url();
@@ -396,16 +411,16 @@ private:
                     }
                     result.body = reply->readAll();
                     const QString textBody = QString::fromUtf8(result.body);
-                    result.pageTitle = m_htmlExtractor->extractPageTitle(textBody);
-                    result.headingHints = m_htmlExtractor->extractHeadingHints(textBody);
-                    updateCookies(url, reply->rawHeaderPairs());
+                    result.pageTitle = guard->m_htmlExtractor->extractPageTitle(textBody);
+                    result.headingHints = guard->m_htmlExtractor->extractHeadingHints(textBody);
+                    guard->updateCookies(url, reply->rawHeaderPairs());
                     if (reply->error() != QNetworkReply::NoError) {
                         result.errorString = reply->errorString();
                     }
                 }
-                m_liveReplies.remove(reply);
+                guard->m_liveReplies.remove(reply);
                 reply->deleteLater();
-                dispatchResult(requestId, std::move(result));
+                guard->dispatchResult(requestId, std::move(result));
             });
         }, Qt::QueuedConnection);
     }
@@ -1185,6 +1200,7 @@ void SpiderCore::stop()
 {
     m_stopping = true;
     m_running = false;
+    m_wakeScheduled = false;
     if (auto *asyncFetcher = dynamic_cast<ISpiderAsyncFetcher *>(m_fetcher.get())) {
         asyncFetcher->cancelAll();
     }
@@ -1395,13 +1411,13 @@ void SpiderCore::scheduleMore()
             m_lastSchedulerLogMs = nowMs;
             emitEvent(QStringLiteral("[scheduler] Bekleyen URL'ler var, %1 ms sonra tekrar denenecek").arg(wakeDelayMs));
         }
-        std::thread([this, wakeDelayMs]() {
+        m_pool.enqueue([this, wakeDelayMs]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(wakeDelayMs));
             m_wakeScheduled = false;
             if (!m_stopping && m_running) {
                 scheduleMore();
             }
-        }).detach();
+        });
     }
     if (!m_stopping && m_running && queuedCount() > 0 && m_activeFetches.load() == 0) {
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
