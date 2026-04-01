@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scantypes.h"
+#include "reconorchestratorstate.h"
 
 #include <QObject>
 #include <QPointer>
@@ -16,13 +17,6 @@ class VulnMatcherModule;
 class ScanOrchestrator : public QObject
 {
     Q_OBJECT
-
-    enum class JobKind
-    {
-        PortScan,
-        Dns,
-        Osint
-    };
 
 public:
     explicit ScanOrchestrator(QObject *parent = nullptr);
@@ -67,8 +61,8 @@ private:
     void registerMetaTypes();
     void stopThreads();
     void resetJobState();
-    void markJobStarted(JobKind kind);
-    void markJobFinished(JobKind kind);
+    void markJobStarted(ReconOrchestratorState::JobKind kind);
+    void markJobFinished(ReconOrchestratorState::JobKind kind);
 
     Logger *m_logger = nullptr;
     FastPortScannerModule *m_fastPortScanner = nullptr;
@@ -78,9 +72,5 @@ private:
     QThread m_dnsThread;
     QThread m_osintThread;
     QThread m_vulnThread;
-    int m_activeJobs = 0;
-    bool m_portScanPending = false;
-    bool m_dnsPending = false;
-    bool m_osintPending = false;
-    bool m_finishEmitted = false;
+    ReconOrchestratorState m_jobState;
 };

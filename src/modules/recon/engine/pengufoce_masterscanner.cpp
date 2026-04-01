@@ -1,6 +1,8 @@
 #include "pengufoce_masterscanner.h"
 
 #include "core/logging/logger.h"
+#include "modules/recon/engine/reconcoreutils.h"
+#include "modules/recon/engine/reconwebinsights.h"
 
 #include <QDateTime>
 #include <QDnsLookup>
@@ -643,22 +645,13 @@ void PenguFoceMasterScanner::handleDnsLookupFinished()
 
 PenguFoceMasterScanner::ParsedTarget PenguFoceMasterScanner::parseTarget(const QString &target) const
 {
+    const ReconParsedTarget parsedTarget = reconParseTarget(target);
     ParsedTarget parsed;
-    parsed.original = target.trimmed();
-
-    const QUrl candidate = QUrl::fromUserInput(parsed.original);
-    parsed.url = candidate.isValid() ? candidate : QUrl(QStringLiteral("https://%1").arg(parsed.original));
-    if (parsed.url.scheme().isEmpty()) {
-        parsed.url.setScheme("https");
-    }
-
-    parsed.host = parsed.url.host().trimmed();
-    if (parsed.host.isEmpty()) {
-        parsed.host = parsed.original;
-    }
-
-    parsed.scheme = parsed.url.scheme().isEmpty() ? QStringLiteral("https") : parsed.url.scheme().toLower();
-    parsed.sanitized = parsed.url.toString(QUrl::RemoveUserInfo | QUrl::NormalizePathSegments);
+    parsed.original = parsedTarget.original;
+    parsed.sanitized = parsedTarget.sanitized;
+    parsed.host = parsedTarget.host;
+    parsed.scheme = parsedTarget.scheme;
+    parsed.url = parsedTarget.url;
     return parsed;
 }
 
@@ -703,13 +696,7 @@ void PenguFoceMasterScanner::registerStageFinished()
 
 void PenguFoceMasterScanner::updateProgress()
 {
-    if (m_totalStages <= 0) {
-        emit scanProgress(0);
-        return;
-    }
-
-    const int completed = m_totalStages - m_pendingStages;
-    emit scanProgress(static_cast<int>((static_cast<double>(completed) / static_cast<double>(m_totalStages)) * 100.0));
+    emit scanProgress(reconProgressPercent(m_totalStages, m_pendingStages));
 }
 
 void PenguFoceMasterScanner::addFinding(const QString &severity,
@@ -735,14 +722,12 @@ void PenguFoceMasterScanner::addFinding(const QString &severity,
 
 int PenguFoceMasterScanner::calculateSecurityScore() const
 {
-    return qBound(0, m_securityScore, 100);
+    return reconClampedSecurityScore(m_securityScore);
 }
 
 QString PenguFoceMasterScanner::severityForPenalty(int penalty) const
 {
-    if (penalty >= 25) return "high";
-    if (penalty >= 10) return "medium";
-    return "low";
+    return reconSeverityForPenalty(penalty);
 }
 
 void PenguFoceMasterScanner::analyzeWebReply(QNetworkReply *reply)
@@ -756,115 +741,25 @@ void PenguFoceMasterScanner::analyzeWebReply(QNetworkReply *reply)
         return;
     }
 
-    const auto headers = reply->rawHeaderPairs();
-    auto hasHeader = [&headers](QByteArrayView header) {
-        const QByteArray target = header.toByteArray().toLower();
-        for (const auto &pair : headers) {
-            if (pair.first.toLower() == target) {
-                return true;
-            }
-        }
-        return false;
-    };
-    auto headerValue = [&headers](QByteArrayView header) {
-        const QByteArray target = header.toByteArray().toLower();
-        for (const auto &pair : headers) {
-            if (pair.first.toLower() == target) {
-                return QString::fromUtf8(pair.second).trimmed();
-            }
-        }
-        return QString();
-    };
+    const ReconWebAnalysis analysis = reconAnalyzeWebResponse({
+        reply->url(),
+        reply->rawHeaderPairs(),
+        reply->header(QNetworkRequest::SetCookieHeader).value<QList<QNetworkCookie>>(),
+        reply->readAll().left(4096),
+        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt()
+    });
 
-    if (!hasHeader("content-security-policy")) {
-        addFinding("medium", "CSP eksik", "Content-Security-Policy basligi eksik", "web", 15);
+    for (const ReconFindingCandidate &finding : analysis.findings) {
+        addFinding(finding.severity, finding.title, finding.description, finding.category, finding.penalty);
     }
-    if (!hasHeader("strict-transport-security") && reply->url().scheme().toLower() == "https") {
-        addFinding("high", "HSTS eksik", "Strict-Transport-Security basligi eksik", "web", 20);
-    }
-    if (!hasHeader("x-frame-options")) {
-        addFinding("medium", "X-Frame-Options eksik", "Clickjacking koruma basligi eksik", "web", 10);
-    }
-    if (!hasHeader("x-content-type-options")) {
-        addFinding("medium", "X-Content-Type-Options eksik", "MIME sniffing koruma basligi eksik", "web", 8);
-    }
-    if (!hasHeader("referrer-policy")) {
-        addFinding("low", "Referrer-Policy eksik", "Yonlendiren bilgi politikasi tanimli degil", "web", 4);
-    }
-    if (!hasHeader("permissions-policy")) {
-        addFinding("low", "Permissions-Policy eksik", "Tarayici yetki politikasi tanimli degil", "web", 4);
-    }
-
-    const QString serverHeader = QString::fromUtf8(reply->rawHeader("Server")).trimmed();
-    const QString poweredByHeader = QString::fromUtf8(reply->rawHeader("X-Powered-By")).trimmed();
-    QString wafName;
-    const QString bodyText = QString::fromUtf8(reply->readAll().left(4096));
-
-    if (hasHeader("cf-ray") || hasHeader("cf-cache-status") || serverHeader.contains("cloudflare", Qt::CaseInsensitive)
-        || bodyText.contains("Attention Required!", Qt::CaseInsensitive)) {
-        wafName = "Cloudflare";
-    } else if (hasHeader("x-sucuri-id") || hasHeader("x-sucuri-cache") || serverHeader.contains("Sucuri", Qt::CaseInsensitive)) {
-        wafName = "Sucuri";
-    } else if (hasHeader("x-iinfo") || hasHeader("x-cdn") && headerValue("x-cdn").contains("incapsula", Qt::CaseInsensitive)
-               || serverHeader.contains("Incapsula", Qt::CaseInsensitive)) {
-        wafName = "Imperva Incapsula";
-    } else if (hasHeader("akamai-origin-hop") || hasHeader("x-akamai-transformed")) {
-        wafName = "Akamai";
-    } else if (hasHeader("x-amz-cf-id") || hasHeader("x-cache") && headerValue("x-cache").contains("cloudfront", Qt::CaseInsensitive)
-               || bodyText.contains("Generated by cloudfront", Qt::CaseInsensitive)) {
-        wafName = "AWS CloudFront/WAF";
-    } else if (hasHeader("x-cdn") && headerValue("x-cdn").contains("fastly", Qt::CaseInsensitive)) {
-        wafName = "Fastly";
-    }
-
-    if (!wafName.isEmpty()) {
-        addFinding("info",
-                   "WAF tespit edildi",
-                   QString("Web katmaninda %1 koruma veya ters vekil izi goruldu").arg(wafName),
-                   "web",
-                   0);
-    }
-
-    if (!serverHeader.isEmpty()) {
-        if (extractVersion(serverHeader.toUtf8()).size() > 0) {
-            addFinding("low", "Sunucu surumu ifsa oluyor", QString("Server basligi surum bilgisi donuyor: %1").arg(serverHeader), "web", 5);
-            startCveLookup(serverHeader.section('/', 0, 0), extractVersion(serverHeader.toUtf8()));
-        }
-        if (serverHeader.contains("Apache/2.2", Qt::CaseInsensitive)
-            || serverHeader.contains("nginx/1.14", Qt::CaseInsensitive)
-            || serverHeader.contains("IIS/7", Qt::CaseInsensitive)) {
-            addFinding("medium", "Eski web sunucusu izi", QString("Server basligi eski surum isareti veriyor: %1").arg(serverHeader), "web", 10);
+    for (const ReconCveCandidate &cveCandidate : analysis.cveCandidates) {
+        if (!cveCandidate.product.isEmpty() && !cveCandidate.version.isEmpty()) {
+            startCveLookup(cveCandidate.product, cveCandidate.version);
         }
     }
-    if (!poweredByHeader.isEmpty() && extractVersion(poweredByHeader.toUtf8()).size() > 0) {
-        addFinding("low", "Uygulama teknolojisi ifsa oluyor", QString("X-Powered-By basligi surum bilgisi donuyor: %1").arg(poweredByHeader), "web", 4);
-        startCveLookup(poweredByHeader.section('/', 0, 0), extractVersion(poweredByHeader.toUtf8()));
+    if (!analysis.observation.isEmpty()) {
+        m_report.webObservations << analysis.observation;
     }
-
-    const QList<QNetworkCookie> cookies = reply->header(QNetworkRequest::SetCookieHeader).value<QList<QNetworkCookie>>();
-    for (const QNetworkCookie &cookie : cookies) {
-        if (!cookie.isSecure() && reply->url().scheme().toLower() == "https") {
-            addFinding("medium", "Guvensiz cookie", QString("'%1' cerezinde Secure bayragi yok").arg(QString::fromUtf8(cookie.name())), "web", 8);
-        }
-        if (!cookie.isHttpOnly()) {
-            addFinding("low", "HttpOnly eksik", QString("'%1' cerezinde HttpOnly bayragi yok").arg(QString::fromUtf8(cookie.name())), "web", 4);
-        }
-    }
-
-    if (bodyText.contains("index of /", Qt::CaseInsensitive)) {
-        addFinding("medium", "Dizin listeleme izi", "Yanitta dizin listeleme davranisi goruldu", "web", 12);
-    }
-    if (bodyText.contains("phpinfo()", Qt::CaseInsensitive) || bodyText.contains("server api", Qt::CaseInsensitive)) {
-        addFinding("high", "Bilgi ifsasi", "Yanitta phpinfo veya ayrintili ortam bilgisi izi goruldu", "web", 18);
-    }
-
-    m_report.webObservations << QVariantMap{
-        {"url", reply->url().toString()},
-        {"status", reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt()},
-        {"server", serverHeader},
-        {"version", extractVersion(bodyText.toUtf8())},
-        {"waf", wafName}
-    };
 }
 
 void PenguFoceMasterScanner::analyzeTls(QNetworkReply *reply)
@@ -875,41 +770,29 @@ void PenguFoceMasterScanner::analyzeTls(QNetworkReply *reply)
 
     const QSslConfiguration ssl = reply->sslConfiguration();
     const QSslCertificate cert = ssl.peerCertificate();
-    if (cert.isNull()) {
-        addFinding("high", "TLS sertifikasi eksik", "HTTPS ucnoktasi istemciye sertifika sunmadi", "tls", 25);
-        return;
-    }
-
-    if (cert.expiryDate().isValid() && cert.expiryDate() < QDateTime::currentDateTimeUtc()) {
-        addFinding("high", "TLS sertifikasi suresi dolmus", "HTTPS sertifikasinin suresi dolmus", "tls", 25);
-    } else if (cert.expiryDate().isValid() && QDateTime::currentDateTimeUtc().daysTo(cert.expiryDate()) <= 21) {
-        addFinding("medium", "TLS sertifikasi yakinda bitecek", "HTTPS sertifikasinin suresi yakinda dolacak", "tls", 8);
-    }
-
-    if (ssl.sessionProtocol() < QSsl::TlsV1_2) {
-        addFinding("medium", "Eski TLS protokolu", "Ucnokta TLS 1.2 alti protokol kullaniyor", "tls", 12);
-    }
-
+    QStringList cipherNames;
     const QList<QSslCipher> ciphers = ssl.sessionCipher().isNull() ? ssl.ciphers() : QList<QSslCipher>{ssl.sessionCipher()};
     for (const QSslCipher &cipher : ciphers) {
-        const QString cipherName = cipher.name();
-        if (cipherName.contains("RC4", Qt::CaseInsensitive) || cipherName.contains("3DES", Qt::CaseInsensitive)) {
-            addFinding("medium",
-                       "Zayif TLS sifre paketi",
-                       QString("TLS oturumu zayif cipher suite kullaniyor: %1").arg(cipherName),
-                       "tls",
-                       10);
-            break;
+        if (!cipher.name().isEmpty() && !cipherNames.contains(cipher.name())) {
+            cipherNames << cipher.name();
         }
     }
 
-    if (cert.subjectInfo(QSslCertificate::CommonName).join(' ').trimmed().isEmpty()) {
-        addFinding("low", "Sertifika subject eksik", "Sertifikada belirgin common name bilgisi yok", "tls", 4);
-    }
+    const ReconTlsAnalysis analysis = reconAnalyzeTlsState({
+        !cert.isNull(),
+        cert.expiryDate(),
+        ssl.sessionProtocol(),
+        cipherNames,
+        cert.subjectInfo(QSslCertificate::CommonName).join(' ').trimmed(),
+        cert.issuerInfo(QSslCertificate::Organization).join(' ')
+    });
 
-    const QString issuer = cert.issuerInfo(QSslCertificate::Organization).join(' ');
-    if (issuer.contains("Let's Encrypt", Qt::CaseInsensitive)) {
-        emit findingDiscovered("info", tr("TLS gozlemi"), tr("Sertifika saglayicisi Let's Encrypt olarak goruldu"));
+    for (const ReconFindingCandidate &finding : analysis.findings) {
+        if (finding.severity == QStringLiteral("info")) {
+            emit findingDiscovered(finding.severity, finding.title, finding.description);
+            continue;
+        }
+        addFinding(finding.severity, finding.title, finding.description, finding.category, finding.penalty);
     }
 }
 

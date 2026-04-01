@@ -70,17 +70,17 @@ void ScanOrchestrator::startRecon(const QString &target,
     emit scanStarted(target);
 
     if (!ports.isEmpty()) {
-        markJobStarted(JobKind::PortScan);
+        markJobStarted(ReconOrchestratorState::JobKind::PortScan);
         m_fastPortScanner->startScan(target, ports, timeoutMs);
     }
 
     if (!domain.trimmed().isEmpty()) {
-        markJobStarted(JobKind::Dns);
+        markJobStarted(ReconOrchestratorState::JobKind::Dns);
         emit requestDnsLookup(domain);
     }
 
     if (osintEndpoint.isValid() && !osintEndpoint.isEmpty()) {
-        markJobStarted(JobKind::Osint);
+        markJobStarted(ReconOrchestratorState::JobKind::Osint);
         emit requestLeakCheck(domain.isEmpty() ? target : domain, osintEndpoint, QString());
     }
 
@@ -91,7 +91,7 @@ void ScanOrchestrator::startRecon(const QString &target,
                            .arg(ports.size()));
     }
 
-    if (m_activeJobs == 0) {
+    if (m_jobState.activeJobs() == 0) {
         emit reconFinished();
     }
 }
@@ -154,17 +154,17 @@ void ScanOrchestrator::handleModuleStatus(const QString &message)
 
 void ScanOrchestrator::handlePortScanFinished()
 {
-    markJobFinished(JobKind::PortScan);
+    markJobFinished(ReconOrchestratorState::JobKind::PortScan);
 }
 
 void ScanOrchestrator::handleDnsFinished()
 {
-    markJobFinished(JobKind::Dns);
+    markJobFinished(ReconOrchestratorState::JobKind::Dns);
 }
 
 void ScanOrchestrator::handleOsintFinished()
 {
-    markJobFinished(JobKind::Osint);
+    markJobFinished(ReconOrchestratorState::JobKind::Osint);
 }
 
 void ScanOrchestrator::registerMetaTypes()
@@ -177,61 +177,17 @@ void ScanOrchestrator::registerMetaTypes()
 
 void ScanOrchestrator::resetJobState()
 {
-    m_activeJobs = 0;
-    m_portScanPending = false;
-    m_dnsPending = false;
-    m_osintPending = false;
-    m_finishEmitted = false;
+    m_jobState.reset();
 }
 
-void ScanOrchestrator::markJobStarted(JobKind kind)
+void ScanOrchestrator::markJobStarted(ReconOrchestratorState::JobKind kind)
 {
-    bool *flag = nullptr;
-    switch (kind) {
-    case JobKind::PortScan:
-        flag = &m_portScanPending;
-        break;
-    case JobKind::Dns:
-        flag = &m_dnsPending;
-        break;
-    case JobKind::Osint:
-        flag = &m_osintPending;
-        break;
-    }
-
-    if (flag && !*flag) {
-        *flag = true;
-        ++m_activeJobs;
-        m_finishEmitted = false;
-    }
+    m_jobState.markStarted(static_cast<ReconOrchestratorState::JobKind>(kind));
 }
 
-void ScanOrchestrator::markJobFinished(JobKind kind)
+void ScanOrchestrator::markJobFinished(ReconOrchestratorState::JobKind kind)
 {
-    bool *flag = nullptr;
-    switch (kind) {
-    case JobKind::PortScan:
-        flag = &m_portScanPending;
-        break;
-    case JobKind::Dns:
-        flag = &m_dnsPending;
-        break;
-    case JobKind::Osint:
-        flag = &m_osintPending;
-        break;
-    }
-
-    if (!flag || !*flag) {
-        return;
-    }
-
-    *flag = false;
-    if (m_activeJobs > 0) {
-        --m_activeJobs;
-    }
-
-    if (m_activeJobs == 0 && !m_finishEmitted) {
-        m_finishEmitted = true;
+    if (m_jobState.markFinished(static_cast<ReconOrchestratorState::JobKind>(kind))) {
         emit reconFinished();
     }
 }

@@ -86,7 +86,10 @@ qt_add_executable(PenguFoce
     src/modules/recon/engine/dnsreconmodule.cpp
     src/modules/recon/engine/osintandleakmodule.cpp
     src/modules/recon/engine/pengufoce_masterscanner.cpp
+    src/modules/recon/engine/reconcoreutils.cpp
+    src/modules/recon/engine/reconorchestratorstate.cpp
     src/modules/recon/engine/reconreportbuilder.cpp
+    src/modules/recon/engine/reconwebinsights.cpp
     src/modules/recon/engine/vulnmatchermodule.cpp
     src/modules/spider/engine/cdpclient.cpp
     src/modules/spider/engine/spiderhostinsights.cpp
@@ -397,5 +400,67 @@ target_link_libraries(pengufoce_core_state_tests PRIVATE
 add_test(
     NAME pengufoce_core_state_tests
     COMMAND pengufoce_core_state_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_executable(pengufoce_recon_engine_tests
+    tests/recon_engine_tests.cpp
+    src/modules/recon/engine/reconcoreutils.cpp
+    src/modules/recon/engine/reconreportbuilder.cpp
+)
+
+target_include_directories(pengufoce_recon_engine_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pengufoce_recon_engine_tests PRIVATE
+    Qt6::Core
+    Qt6::Network
+)
+
+add_test(
+    NAME pengufoce_recon_engine_tests
+    COMMAND pengufoce_recon_engine_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_executable(pengufoce_recon_orchestrator_state_tests
+    tests/recon_orchestrator_state_tests.cpp
+    src/modules/recon/engine/reconorchestratorstate.cpp
+    src/modules/recon/engine/reconreportbuilder.cpp
+)
+
+target_include_directories(pengufoce_recon_orchestrator_state_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pengufoce_recon_orchestrator_state_tests PRIVATE
+    Qt6::Core
+    Qt6::Network
+)
+
+add_test(
+    NAME pengufoce_recon_orchestrator_state_tests
+    COMMAND pengufoce_recon_orchestrator_state_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_executable(pengufoce_recon_web_tls_tests
+    tests/recon_web_tls_tests.cpp
+    src/modules/recon/engine/reconwebinsights.cpp
+)
+
+target_include_directories(pengufoce_recon_web_tls_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pengufoce_recon_web_tls_tests PRIVATE
+    Qt6::Core
+    Qt6::Network
+)
+
+add_test(
+    NAME pengufoce_recon_web_tls_tests
+    COMMAND pengufoce_recon_web_tls_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
